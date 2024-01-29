@@ -129,7 +129,7 @@ pub fn rr<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
     let c = value & 0x01 != 0;
     let value = value.shr(1);
-    let value = value | ((cpu.registers.f.carry as u8) << 8);
+    let value = value | ((cpu.registers.f.carry as u8) << 7);
 
     loc.write(cpu, value);
 
@@ -450,5 +450,79 @@ pub fn di(cpu: &mut Cpu) -> Timing {
 pub fn ldhl(cpu: &mut Cpu) -> Timing {
     let sp = offset_sp(cpu, Imem8);
     Reg16::HL.write(cpu, sp);
+    Timing::Normal
+}
+
+pub fn srl<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = value >> 1;
+    loc.write(cpu, value);
+
+    cpu.registers.f.zero = result == 0;
+    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.half_carry = false;
+    cpu.registers.f.subtract = false;
+    Timing::Normal
+}
+
+pub fn swap<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = (value << 4) | (value >> 4);
+    loc.write(cpu, result);
+
+    cpu.registers.f.zero = result == 0;
+    cpu.registers.f.carry = false;
+    cpu.registers.f.half_carry = false;
+    cpu.registers.f.subtract = false;
+
+    Timing::Normal
+}
+
+pub fn sra<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = (value & 0x80) | value >> 1;
+    loc.write(cpu, value);
+
+    cpu.registers.f.zero = result == 0;
+    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.half_carry = false;
+    cpu.registers.f.subtract = false;
+    Timing::Normal
+}
+
+pub fn sla<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = (value & 0x80) | ((value << 1) & !(0x80));
+    loc.write(cpu, value);
+
+    cpu.registers.f.zero = result == 0;
+    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.half_carry = false;
+    cpu.registers.f.subtract = false;
+    Timing::Normal
+}
+
+pub fn bit<L: Src<u8>>(cpu: &mut Cpu, bit: u8, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    cpu.registers.f.zero = value & (1 << bit) == 0;
+    cpu.registers.f.subtract = false;
+    cpu.registers.f.half_carry = true;
+
+    Timing::Normal
+}
+
+pub fn res<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, bit: u8, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = value & !(1 << bit);
+    loc.write(cpu, result);
+
+    Timing::Normal
+}
+
+pub fn set<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, bit: u8, loc: L) -> Timing {
+    let value = loc.read(cpu);
+    let result = value | (1 << bit);
+    loc.write(cpu, result);
+
     Timing::Normal
 }

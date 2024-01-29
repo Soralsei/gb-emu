@@ -1,6 +1,5 @@
-use super::mmu::Mmu;
+use crate::memory::mmu::Mmu;
 use super::registers::{Registers, Reg8, Reg16};
-
 
 pub struct Imem8;
 pub struct Imem16;

@@ -52,7 +52,7 @@ impl Mmu {
         }
     }
 
-    pub fn write(&mut self, addr: u16, value: u8) {
+    pub fn write(&mut self, addr: u16, _value: u8) {
         match addr {
             0x0000..=0x7FFF => todo!("Implement rom/cart write"),
             0x8000..=0x9FFF => todo!("Implement vram write"),
