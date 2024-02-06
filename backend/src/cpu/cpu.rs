@@ -1,5 +1,9 @@
+use std::cell::RefMut;
+
+use super::instructions::{Instruction, Opcode, Timing, NOP};
+use super::interrupt::InterruptController;
+use super::registers::{Reg16, Reg8, Registers};
 use crate::memory::mmu::Mmu;
-use super::registers::{Registers, Reg8, Reg16};
 
 pub struct Imem8;
 pub struct Imem16;
@@ -20,6 +24,10 @@ pub trait Dst<T> {
 impl Dst<u8> for Reg8 {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u8) {
+        
+        // if let Reg8::B = self {
+        //     panic!("Writing {:02X} to register B", val);
+        // }
         cpu.registers.write_u8(self, val)
     }
 }
@@ -27,6 +35,9 @@ impl Dst<u8> for Reg8 {
 impl Dst<u16> for Reg16 {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u16) {
+        if let Reg16::SP = self {
+            // println!("Writing 0x{:04X} to SP", val);
+        }
         cpu.registers.write_u16(self, val)
     }
 }
@@ -48,14 +59,18 @@ impl Src<u16> for Reg16 {
 impl Src<u8> for Imem8 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u8 {
-        cpu.fetch_u8()
+        let value = cpu.fetch_u8();
+        // println!("Fetched value 0x{:02X} from immediate memory", value);
+        value
     }
 }
 
 impl Src<u16> for Imem16 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u16 {
-        cpu.fetch_u16()
+        let value = cpu.fetch_u16();
+        // println!("Fetched value 0x{:04X} from immediate memory", value);
+        value
     }
 }
 
@@ -73,6 +88,7 @@ impl Src<u8> for Mem<Imem16> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let Mem(imm) = self;
         let addr = imm.read(cpu);
+        // println!("Fetching value from address 0x{:04X}", addr);
         cpu.mmu.read(addr)
     }
 }
@@ -100,10 +116,9 @@ impl Dst<u16> for Mem<Imem16> {
 
 impl Dst<u8> for Mem<Imem16> {
     #[inline(always)]
-    fn write(self, cpu: &mut Cpu, val: u8) {
+    fn write(self, cpu: &mut Cpu, value: u8) {
         let Mem(loc) = self;
         let addr = loc.read(cpu);
-        let value = val as u8;
         cpu.mmu.write(addr, value);
     }
 }
@@ -144,7 +159,6 @@ impl Dst<u8> for DMem<Imem8> {
     }
 }
 
-
 #[allow(unused)]
 pub struct Cpu {
     pub registers: Registers,
@@ -163,8 +177,75 @@ impl Cpu {
         }
     }
 
+    pub fn step(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u16 {
+        (self.handle_interrupts(interrupt_controller) + self.execute_instruction()).into()
+        // Do extra work ?
+    }
+
+    fn execute_instruction(&mut self) -> u8 {
+        if self.registers.sp >= 0xe000 && self.registers.sp <= 0xefff {
+            panic!("Huh ? {}", self.registers);
+        }
+        let opcode = if !self.halted { self.fetch_u8() } else { 0x00 };
+        
+        let op = match opcode {
+            0xCB => Opcode::Prefixed(self.fetch_u8()),
+            _ => Opcode::Unprefixed(opcode),
+        };
+        let instruction= match Instruction::get_instruction(op) {
+            Some(instruction) => instruction,
+            None => {
+                eprintln!(
+                    "Unknown opcode 0x{:04X} at address 0x{:04X}",
+                    opcode,
+                    self.registers.pc - 1
+                );
+                &NOP
+            }
+        };
+        #[cfg(feature="debug")]
+        {
+            println!("Executing {} at address 0x{:04X}", instruction.mnemonic, self.registers.pc - 1);
+            if self.registers.pc == 0xdef9 {
+                // panic!("aaaaaaa {}", self.registers);
+            }
+        }
+        let timing = (instruction.execute)(self);
+
+        match timing {
+            Timing::Normal => instruction.c_cycles,
+            Timing::Conditionnal => match instruction.conditional_c_cycles {
+                Some(cycles) => cycles,
+                None => instruction.c_cycles,
+            },
+        }
+    }
+
+    fn handle_interrupts(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u8 {
+        // TODO: implement halt bug
+        if !self.ime {
+            // if self.halt...
+            return 0;
+        }
+        let value = interrupt_controller.consume();
+        let value = match value {
+            Some(val) => val,
+            None => return 0,
+        };
+        self.interrupt(value);
+        self.halted = false;
+        20
+    }
+
     pub fn set_interrupts(&mut self, active: bool) {
         self.ime = active;
+    }
+
+    #[allow(unused)]
+    fn interrupt(&mut self, value: u8) {
+        self.set_interrupts(false);
+        self.push16(self.registers.pc);
+        self.registers.pc = value as u16;
     }
 
     #[inline(always)]
@@ -184,15 +265,18 @@ impl Cpu {
     #[inline(always)]
     pub fn push(&mut self, value: u8) {
         let new_sp = self.registers.sp.wrapping_sub(1);
+        self.registers.sp = new_sp;
         self.mmu.write(new_sp, value);
     }
 
     #[inline(always)]
     pub fn push16(&mut self, value: u16) {
         let lsb = (value & 0xFF) as u8;
-        let msb = value as u8;
+        let msb = (value >> 8) as u8;
+        // println!("pushing bytes {:02X} and {:02X} to stack pointer at {:04X}", lsb, msb, self.registers.sp);
         self.push(lsb);
         self.push(msb);
+        // println!("{}", self.registers);
     }
 
     #[inline(always)]
@@ -204,13 +288,15 @@ impl Cpu {
 
     #[inline(always)]
     pub fn pop16(&mut self) -> u16 {
+        // println!("SP before : 0x{:04X}", self.registers.sp);
         let msb: u16 = self.pop() as u16;
         let lsb: u16 = self.pop() as u16;
+        // println!("popped bytes {:02X} and {:02X} from stack", lsb, msb);
         (msb << 8) | lsb
     }
 
     #[inline(always)]
     pub fn stop(&mut self) {
-        unimplemented!("CPU stop not implemented");
+        eprintln!("CPU stop not implemented");
     }
 }

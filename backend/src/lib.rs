@@ -1,3 +1,5 @@
-pub mod cpu;
-pub mod memory;
-pub mod graphics;
+mod cpu;
+mod memory;
+mod graphics;
+pub mod system;
+mod debug;

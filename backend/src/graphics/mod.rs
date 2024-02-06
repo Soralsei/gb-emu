@@ -1,1 +1,2 @@
-pub mod gpu;
+pub mod ppu;
+mod display;

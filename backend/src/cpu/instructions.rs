@@ -1,9 +1,16 @@
 #![allow(unused)]
 use std::ops::{Shl, Shr};
 
-use super::cpu::{self, Cpu, Dst, Imem16, Imem8, Mem, DMem, Src};
-use super::registers::{Reg16, Reg8};
+use super::cpu::{self, Cpu, DMem, Dst, Imem16, Imem8, Mem, Src};
 use super::operations::*;
+use super::registers::{Reg16, Reg8};
+
+pub const NOP: Instruction = Instruction {
+    c_cycles: 4,
+    conditional_c_cycles: None,
+    mnemonic: "NOP",
+    execute: |cpu: &mut Cpu| nop(),
+};
 
 pub enum Opcode {
     Unprefixed(u8),
@@ -13,7 +20,6 @@ pub enum Opcode {
 pub enum Timing {
     Normal,
     Conditionnal,
-    Prefixed,
 }
 
 pub enum Condition {
@@ -25,7 +31,7 @@ pub enum Condition {
 }
 
 impl Condition {
-    pub fn eval(self, cpu: &Cpu) -> bool {
+    pub fn eval(&self, cpu: &Cpu) -> bool {
         match self {
             Condition::Unconditional => true,
             Condition::NotZero => !cpu.registers.f.zero,
@@ -36,6 +42,7 @@ impl Condition {
     }
 }
 
+#[derive(PartialEq)]
 pub struct Instruction {
     pub c_cycles: u8,
     pub conditional_c_cycles: Option<u8>,
@@ -47,18 +54,13 @@ impl Instruction {
     pub fn get_instruction(opcode: Opcode) -> Option<&'static Instruction> {
         match opcode {
             Opcode::Unprefixed(op) => Instruction::get_unprefixed_instruction(op),
-            Opcode::Prefixed(op) => todo!("Implement Prefixed opcode decoding"),
+            Opcode::Prefixed(op) => Instruction::get_prefixed_instruction(op),
         }
     }
 
     fn get_unprefixed_instruction(opcode: u8) -> Option<&'static Instruction> {
         match opcode {
-            0x00 => Some(&Instruction {
-                c_cycles: 4,
-                conditional_c_cycles: None,
-                mnemonic: "NOP",
-                execute: |cpu: &mut Cpu| nop(),
-            }),
+            0x00 => Some(&NOP),
             0x01 => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
@@ -1296,7 +1298,7 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 8",
-                execute: |cpu: &mut Cpu| rst(cpu, 8),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x08),
             }),
             0xD0 => Some(&Instruction {
                 c_cycles: 8,
@@ -1338,7 +1340,7 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 16",
-                execute: |cpu: &mut Cpu| rst(cpu, 16),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x10),
             }),
             0xD8 => Some(&Instruction {
                 c_cycles: 8,
@@ -1374,7 +1376,7 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 24",
-                execute: |cpu: &mut Cpu| rst(cpu, 24),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x18),
             }),
             0xE0 => Some(&Instruction {
                 c_cycles: 12,
@@ -1410,13 +1412,18 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 32",
-                execute: |cpu: &mut Cpu| rst(cpu, 32),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x20),
             }),
             0xE8 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "ADD SP,N",
-                execute: |cpu: &mut Cpu| add_sp(cpu, Imem8),
+                execute: |cpu: &mut Cpu| {
+                    println!("Before {}", cpu.registers);
+                    let test = add_sp(cpu, Imem8);
+                    println!("After {}", cpu.registers);
+                    test
+                },
             }),
             0xE9 => Some(&Instruction {
                 c_cycles: 4,
@@ -1440,7 +1447,7 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 40",
-                execute: |cpu: &mut Cpu| rst(cpu, 40),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x28),
             }),
             0xF0 => Some(&Instruction {
                 c_cycles: 12,
@@ -1482,7 +1489,7 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 48",
-                execute: |cpu: &mut Cpu| rst(cpu, 48),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x30),
             }),
             0xF8 => Some(&Instruction {
                 c_cycles: 12,
@@ -1518,1551 +1525,1551 @@ impl Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RST 56",
-                execute: |cpu: &mut Cpu| rst(cpu, 56),
+                execute: |cpu: &mut Cpu| rst(cpu, 0x38),
             }),
-            _ => panic!("Invalid OPCODE 0x{:02X}", opcode),
+            _ => None,
         }
     }
 
-    fn get_prefixed_instruction(opcode: u8) -> Option<&'static Instruction>  {
+    fn get_prefixed_instruction(opcode: u8) -> Option<&'static Instruction> {
         match opcode {
             0x00 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC B",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::B),
             }),
             0x01 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC C",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::C),
             }),
             0x02 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC D",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::D),
             }),
             0x03 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC E",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::E),
             }),
             0x04 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC H",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::H),
             }),
             0x05 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC L",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::L),
             }),
             0x06 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RLC (HL)",
-                execute: |cpu: &mut Cpu| rlc(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| rlc(cpu, Mem(Reg16::HL)),
             }),
             0x07 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RLC A",
-                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| rlc(cpu, Reg8::A),
             }),
             0x08 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC B",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::B),
             }),
             0x09 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC C",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::C),
             }),
             0x0A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC D",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::D),
             }),
             0x0B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC E",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::E),
             }),
             0x0C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC H",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::H),
             }),
             0x0D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC L",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::L),
             }),
             0x0E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RRC (HL)",
-                execute: |cpu: &mut Cpu| rrc(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| rrc(cpu, Mem(Reg16::HL)),
             }),
             0x0F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RRC A",
-                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| rrc(cpu, Reg8::A),
             }),
             0x10 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL B",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::B),
             }),
             0x11 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL C",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::C),
             }),
             0x12 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL D",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::D),
             }),
             0x13 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL E",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::E),
             }),
             0x14 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL H",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::H),
             }),
             0x15 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL L",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::L),
             }),
             0x16 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RL (HL)",
-                execute: |cpu: &mut Cpu| rl(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| rl(cpu, Mem(Reg16::HL)),
             }),
             0x17 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RL A",
-                execute: |cpu: &mut Cpu| rl(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| rl(cpu, Reg8::A),
             }),
             0x18 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR B",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::B),
             }),
             0x19 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR C",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::C),
             }),
             0x1A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR D",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::D),
             }),
             0x1B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR E",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::E),
             }),
             0x1C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR H",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::H),
             }),
             0x1D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR L",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::L),
             }),
             0x1E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RR (HL)",
-                execute: |cpu: &mut Cpu| rr(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| rr(cpu, Mem(Reg16::HL)),
             }),
             0x1F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RR A",
-                execute: |cpu: &mut Cpu| rr(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| rr(cpu, Reg8::A),
             }),
             0x20 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA B",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::B),
             }),
             0x21 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA C",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::C),
             }),
             0x22 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA D",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::D),
             }),
             0x23 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA E",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::E),
             }),
             0x24 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA H",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::H),
             }),
             0x25 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA L",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::L),
             }),
             0x26 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SLA (HL)",
-                execute: |cpu: &mut Cpu| sla(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| sla(cpu, Mem(Reg16::HL)),
             }),
             0x27 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SLA A",
-                execute: |cpu: &mut Cpu| sla(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| sla(cpu, Reg8::A),
             }),
             0x28 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA B",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::B),
             }),
             0x29 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA C",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::C),
             }),
             0x2A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA D",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::D),
             }),
             0x2B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA E",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::E),
             }),
             0x2C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA H",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::H),
             }),
             0x2D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA L",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::L),
             }),
             0x2E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SRA (HL)",
-                execute: |cpu: &mut Cpu| sra(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| sra(cpu, Mem(Reg16::HL)),
             }),
             0x2F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRA A",
-                execute: |cpu: &mut Cpu| sra(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| sra(cpu, Reg8::A),
             }),
             0x30 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP B",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::B),
             }),
             0x31 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP C",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::C),
             }),
             0x32 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP D",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::D),
             }),
             0x33 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP E",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::E),
             }),
             0x34 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP H",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::H),
             }),
             0x35 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP L",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::L),
             }),
             0x36 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP (HL)",
-                execute: |cpu: &mut Cpu| swap(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| swap(cpu, Mem(Reg16::HL)),
             }),
             0x37 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SWAP A",
-                execute: |cpu: &mut Cpu| swap(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| swap(cpu, Reg8::A),
             }),
             0x38 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL B",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::B)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::B),
             }),
             0x39 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL C",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::C)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::C),
             }),
             0x3A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL D",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::D)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::D),
             }),
             0x3B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL E",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::E)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::E),
             }),
             0x3C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL H",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::H)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::H),
             }),
             0x3D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL L",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::L)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::L),
             }),
             0x3E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SRL (HL)",
-                execute: |cpu: &mut Cpu| srl(cpu, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| srl(cpu, Mem(Reg16::HL)),
             }),
             0x3F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SRL A",
-                execute: |cpu: &mut Cpu| srl(cpu, Reg8::A)
+                execute: |cpu: &mut Cpu| srl(cpu, Reg8::A),
             }),
             0x40 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::B),
             }),
             0x41 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::C),
             }),
             0x42 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::D),
             }),
             0x43 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::E),
             }),
             0x44 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::H),
             }),
             0x45 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::L),
             }),
             0x46 => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Mem(Reg16::HL)),
             }),
             0x47 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 0,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 0, Reg8::A),
             }),
             0x48 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::B),
             }),
             0x49 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::C),
             }),
             0x4A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::D),
             }),
             0x4B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::E),
             }),
             0x4C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::H),
             }),
             0x4D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::L),
             }),
             0x4E => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Mem(Reg16::HL)),
             }),
             0x4F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 1,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 1, Reg8::A),
             }),
             0x50 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::B),
             }),
             0x51 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::C),
             }),
             0x52 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::D),
             }),
             0x53 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::E),
             }),
             0x54 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::H),
             }),
             0x55 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::L),
             }),
             0x56 => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Mem(Reg16::HL)),
             }),
             0x57 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 2,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 2, Reg8::A),
             }),
             0x58 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::B),
             }),
             0x59 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::C),
             }),
             0x5A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::D),
             }),
             0x5B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::E),
             }),
             0x5C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::H),
             }),
             0x5D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::L),
             }),
             0x5E => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Mem(Reg16::HL)),
             }),
             0x5F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 3,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 3, Reg8::A),
             }),
             0x60 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::B),
             }),
             0x61 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::C),
             }),
             0x62 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::D),
             }),
             0x63 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::E),
             }),
             0x64 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::H),
             }),
             0x65 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::L),
             }),
             0x66 => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Mem(Reg16::HL)),
             }),
             0x67 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 4,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 4, Reg8::A),
             }),
             0x68 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::B),
             }),
             0x69 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::C),
             }),
             0x6A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::D),
             }),
             0x6B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::E),
             }),
             0x6C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::H),
             }),
             0x6D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::L),
             }),
             0x6E => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Mem(Reg16::HL)),
             }),
             0x6F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 5,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 5, Reg8::A),
             }),
             0x70 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::B),
             }),
             0x71 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::C),
             }),
             0x72 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::D),
             }),
             0x73 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::E),
             }),
             0x74 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::H),
             }),
             0x75 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::L),
             }),
             0x76 => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Mem(Reg16::HL)),
             }),
             0x77 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 6,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 6, Reg8::A),
             }),
             0x78 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,B",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::B)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::B),
             }),
             0x79 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,C",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::C)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::C),
             }),
             0x7A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,D",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::D)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::D),
             }),
             0x7B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,E",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::E)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::E),
             }),
             0x7C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,H",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::H)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::H),
             }),
             0x7D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,L",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::L)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::L),
             }),
             0x7E => Some(&Instruction {
                 c_cycles: 12,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,(HL)",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Mem(Reg16::HL)),
             }),
             0x7F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "BIT 7,A",
-                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::A)
+                execute: |cpu: &mut Cpu| bit(cpu, 7, Reg8::A),
             }),
             0x80 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,B",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::B),
             }),
             0x81 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,C",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::C),
             }),
             0x82 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,D",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::D),
             }),
             0x83 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,E",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::E),
             }),
             0x84 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,H",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::H),
             }),
             0x85 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,L",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::L),
             }),
             0x86 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 0, Mem(Reg16::HL)),
             }),
             0x87 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 0,A",
-                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 0, Reg8::A),
             }),
             0x88 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,B",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::B),
             }),
             0x89 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,C",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::C),
             }),
             0x8A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,D",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::D),
             }),
             0x8B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,E",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::E),
             }),
             0x8C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,H",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::H),
             }),
             0x8D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,L",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::L),
             }),
             0x8E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 1, Mem(Reg16::HL)),
             }),
             0x8F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 1,A",
-                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 1, Reg8::A),
             }),
             0x90 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,B",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::B),
             }),
             0x91 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,C",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::C),
             }),
             0x92 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,D",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::D),
             }),
             0x93 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,E",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::E),
             }),
             0x94 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,H",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::H),
             }),
             0x95 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,L",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::L),
             }),
             0x96 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 2, Mem(Reg16::HL)),
             }),
             0x97 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 2,A",
-                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 2, Reg8::A),
             }),
             0x98 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,B",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::B),
             }),
             0x99 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,C",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::C),
             }),
             0x9A => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,D",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::D),
             }),
             0x9B => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,E",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::E),
             }),
             0x9C => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,H",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::H),
             }),
             0x9D => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,L",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::L),
             }),
             0x9E => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 3, Mem(Reg16::HL)),
             }),
             0x9F => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 3,A",
-                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 3, Reg8::A),
             }),
             0xA0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,B",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::B),
             }),
             0xA1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,C",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::C),
             }),
             0xA2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,D",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::D),
             }),
             0xA3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,E",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::E),
             }),
             0xA4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,H",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::H),
             }),
             0xA5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,L",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::L),
             }),
             0xA6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 4, Mem(Reg16::HL)),
             }),
             0xA7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 4,A",
-                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 4, Reg8::A),
             }),
             0xA8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,B",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::B),
             }),
             0xA9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,C",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::C),
             }),
             0xAA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,D",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::D),
             }),
             0xAB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,E",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::E),
             }),
             0xAC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,H",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::H),
             }),
             0xAD => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,L",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::L),
             }),
             0xAE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 5, Mem(Reg16::HL)),
             }),
             0xAF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 5,A",
-                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 5, Reg8::A),
             }),
             0xB0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,B",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::B),
             }),
             0xB1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,C",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::C),
             }),
             0xB2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,D",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::D),
             }),
             0xB3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,E",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::E),
             }),
             0xB4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,H",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::H),
             }),
             0xB5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,L",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::L),
             }),
             0xB6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 6, Mem(Reg16::HL)),
             }),
             0xB7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 6,A",
-                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 6, Reg8::A),
             }),
             0xB8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,B",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::B)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::B),
             }),
             0xB9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,C",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::C)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::C),
             }),
             0xBA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,D",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::D)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::D),
             }),
             0xBB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,E",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::E)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::E),
             }),
             0xBC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,H",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::H)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::H),
             }),
             0xBD => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,L",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::L)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::L),
             }),
             0xBE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,(HL)",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| res(cpu, 7, Mem(Reg16::HL)),
             }),
             0xBF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "RES 7,A",
-                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::A)
+                execute: |cpu: &mut Cpu| res(cpu, 7, Reg8::A),
             }),
             0xC0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,B",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::B),
             }),
             0xC1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,C",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::C),
             }),
             0xC2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,D",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::D),
             }),
             0xC3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,E",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::E),
             }),
             0xC4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,H",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::H),
             }),
             0xC5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,L",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::L),
             }),
             0xC6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 0, Mem(Reg16::HL)),
             }),
             0xC7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 0,A",
-                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 0, Reg8::A),
             }),
             0xC8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,B",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::B),
             }),
             0xC9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,C",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::C),
             }),
             0xCA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,D",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::D),
             }),
             0xCB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,E",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::E),
             }),
             0xCC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,H",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::H),
             }),
             0xCD => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,L",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::L),
             }),
             0xCE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 1, Mem(Reg16::HL)),
             }),
             0xCF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 1,A",
-                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 1, Reg8::A),
             }),
             0xD0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,B",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::B),
             }),
             0xD1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,C",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::C),
             }),
             0xD2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,D",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::D),
             }),
             0xD3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,E",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::E),
             }),
             0xD4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,H",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::H),
             }),
             0xD5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,L",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::L),
             }),
             0xD6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 2, Mem(Reg16::HL)),
             }),
             0xD7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 2,A",
-                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 2, Reg8::A),
             }),
             0xD8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,B",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::B),
             }),
             0xD9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,C",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::C),
             }),
             0xDA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,D",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::D),
             }),
             0xDB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,E",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::E),
             }),
             0xDC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,H",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::H),
             }),
             0xDD => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,L",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::L),
             }),
             0xDE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 3, Mem(Reg16::HL)),
             }),
             0xDF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 3,A",
-                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 3, Reg8::A),
             }),
             0xE0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,B",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::B),
             }),
             0xE1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,C",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::C),
             }),
             0xE2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,D",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::D),
             }),
             0xE3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,E",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::E),
             }),
             0xE4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,H",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::H),
             }),
             0xE5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,L",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::L),
             }),
             0xE6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 4, Mem(Reg16::HL)),
             }),
             0xE7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 4,A",
-                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 4, Reg8::A),
             }),
             0xE8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,B",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::B),
             }),
             0xE9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,C",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::C),
             }),
             0xEA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,D",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::D),
             }),
             0xEB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,E",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::E),
             }),
             0xEC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,H",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::H),
             }),
             0xED => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,L",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::L),
             }),
             0xEE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 5, Mem(Reg16::HL)),
             }),
             0xEF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 5,A",
-                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 5, Reg8::A),
             }),
             0xF0 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,B",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::B),
             }),
             0xF1 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,C",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::C),
             }),
             0xF2 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,D",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::D),
             }),
             0xF3 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,E",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::E),
             }),
             0xF4 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,H",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::H),
             }),
             0xF5 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,L",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::L),
             }),
             0xF6 => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 6, Mem(Reg16::HL)),
             }),
             0xF7 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 6,A",
-                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 6, Reg8::A),
             }),
             0xF8 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,B",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::B)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::B),
             }),
             0xF9 => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,C",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::C)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::C),
             }),
             0xFA => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,D",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::D)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::D),
             }),
             0xFB => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,E",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::E)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::E),
             }),
             0xFC => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,H",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::H)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::H),
             }),
             0xFD => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,L",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::L)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::L),
             }),
             0xFE => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,(HL)",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Mem(Reg16::HL))
+                execute: |cpu: &mut Cpu| set(cpu, 7, Mem(Reg16::HL)),
             }),
             0xFF => Some(&Instruction {
                 c_cycles: 8,
                 conditional_c_cycles: None,
                 mnemonic: "SET 7,A",
-                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::A)
+                execute: |cpu: &mut Cpu| set(cpu, 7, Reg8::A),
             }),
-            _ => panic!("Invalid OPCODE 0x{:02X}", opcode),
+            _ => None,
         }
     }
 }

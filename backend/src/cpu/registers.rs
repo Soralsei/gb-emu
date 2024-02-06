@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 const ZERO_FLAG: u8 = 7;
 const SUB_FLAG: u8 = 6;
 const HALF_CARRY_FLAG: u8 = 5;
@@ -14,7 +13,11 @@ pub struct Flags {
 
 impl std::fmt::Display for Flags {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "flags")
+        write!(
+            f,
+            "Flags [z: {}, n: {}, hc: {}, c: {}]",
+            self.zero, self.subtract, self.half_carry, self.carry
+        )
     }
 }
 
@@ -77,14 +80,14 @@ pub struct Registers {
 impl Registers {
     pub fn new() -> Registers {
         Registers {
-            a: 0x01,
+            a: 0x11,
             b: 0x00,
-            c: 0x13,
-            d: 0x00,
-            e: 0xd8,
-            f: (Flags::from(0xb0)),
-            h: 0x01,
-            l: 0x4d,
+            c: 0x00,
+            d: 0xFF,
+            e: 0x56,
+            f: (Flags::from(0x80)),
+            h: 0x00,
+            l: 0x0D,
             pc: 0x100,
             sp: 0xfffe,
         }
@@ -133,24 +136,12 @@ impl Registers {
     #[inline(always)]
     pub fn write_u16(&mut self, reg: Reg16, value: u16) {
         match reg {
-            Reg16::AF => {
-                self.set_af(value)
-            }
-            Reg16::BC => {
-                self.set_bc(value);
-            }
-            Reg16::DE => {
-                self.set_de(value);
-            }
-            Reg16::HL => {
-                self.set_hl(value);
-            }
-            Reg16::SP => {
-                self.sp = value;
-            }
-            Reg16::PC => {
-                self.pc = value;
-            }
+            Reg16::AF => self.set_af(value),
+            Reg16::BC => self.set_bc(value),
+            Reg16::DE => self.set_de(value),
+            Reg16::HL => self.set_hl(value),
+            Reg16::SP => self.sp = value,
+            Reg16::PC => self.pc = value,
         }
     }
 
@@ -208,8 +199,8 @@ impl std::fmt::Display for Registers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Registers (a: {}, f: {}, b: {}, c: {}, d: {}, e: {}, h: {}, l: {})",
-            self.a, self.f, self.b, self.c, self.d, self.e, self.h, self.l
+            "Registers [a: 0x{:02X}, f: {}, b: 0x{:02X}, c: 0x{:02X}, d: 0x{:02X}, e: 0x{:02X}, h: 0x{:02X}, l: 0x{:02X}, sp: 0x{:04X}, pc: 0x{:04X}]",
+            self.a, self.f, self.b, self.c, self.d, self.e, self.h, self.l, self.sp, self.pc
         )
     }
 }

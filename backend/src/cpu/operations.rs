@@ -1,6 +1,7 @@
 use super::cpu::{Cpu, Dst, Imem8, Src};
 use super::instructions::Timing;
 use super::registers::{Reg8, Reg16};
+use std::fmt::UpperHex;
 use std::ops::{Shl, Shr};
 use super::instructions::Condition;
 
@@ -9,19 +10,19 @@ pub fn nop() -> Timing {
     Timing::Normal
 }
 
-pub fn ld<T, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S) -> Timing {
+pub fn ld<T: UpperHex, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S) -> Timing {
     let val: T = src.read(cpu);
     dst.write(cpu, val);
     Timing::Normal
 }
 
-pub fn ldi<T, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S, to_inc: Reg16) -> Timing {
+pub fn ldi<T: UpperHex, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S, to_inc: Reg16) -> Timing {
     let t: Timing = ld(cpu, dst, src);
     inc16(cpu, to_inc);
     t
 }
 
-pub fn ldd<T, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S, to_dec: Reg16) -> Timing {
+pub fn ldd<T: UpperHex, D: Dst<T>, S: Src<T>>(cpu: &mut Cpu, dst: D, src: S, to_dec: Reg16) -> Timing {
     let t: Timing = ld(cpu, dst, src);
     dec16(cpu, to_dec);
     t
@@ -98,8 +99,9 @@ pub fn rra(cpu: &mut Cpu) -> Timing {
 pub fn rlc<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
     cpu.registers.f.carry = value & 0x80 != 0;
+    
     let value = value.rotate_left(1);
-
+    
     cpu.registers.f.zero = value == 0;
     cpu.registers.f.half_carry = false;
     cpu.registers.f.subtract = false;
@@ -178,7 +180,6 @@ pub fn add16<D: Dst<u16> + Src<u16> + Copy, S: Src<u16>>(cpu: &mut Cpu, dest: D,
     dest.write(cpu, result);
 
     cpu.registers.f.carry = carry;
-    cpu.registers.f.zero = result == 0;
     cpu.registers.f.half_carry = (value_src & 0xFF) + (value_dest & 0xFF) > 0xFF;
     cpu.registers.f.subtract = false;
 
@@ -206,13 +207,12 @@ pub fn add_sp<S: Src<u8>>(cpu: &mut Cpu, src: S) -> Timing {
 }
 
 pub fn jr<S: Src<u8>>(cpu: &mut Cpu, cond: Condition, src: S) -> Timing {
+    let offset = src.read(cpu) as i8;
     if cond.eval(cpu) {
-        let offset = src.read(cpu) as i8;
         let offset = offset as i16;
         cpu.registers.pc = ((cpu.registers.pc as i16).wrapping_add(offset)) as u16;
         Timing::Conditionnal
     } else {
-        cpu.registers.pc += 1;
         Timing::Normal
     }
 }
@@ -271,7 +271,7 @@ pub fn ccf(cpu: &mut Cpu) -> Timing {
 
 pub fn halt(cpu: &mut Cpu) -> Timing {
     cpu.halted = true;
-    println!("Should implement CPU halting");
+    // println!("Should implement CPU halting");
     Timing::Normal
 }
 
@@ -387,6 +387,8 @@ pub fn cp<D: Dst<u8> + Src<u8>, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: S) -> T
 pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
     if cond.eval(cpu) {
         let pc = cpu.pop16();
+        #[cfg(feature="debug")]
+        println!("Returning to address 0x{:04X}", pc);
         cpu.registers.pc = pc;
         return Timing::Conditionnal;
     }
@@ -395,19 +397,22 @@ pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
 
 pub fn pop<D: Dst<u16>>(cpu: &mut Cpu, dest: D) -> Timing {
     let value = cpu.pop16();
+    // println!("Writing {:04X}", value);
     dest.write(cpu, value);
+
     Timing::Normal
 }
 
 pub fn push<S: Src<u16>>(cpu: &mut Cpu, src: S) -> Timing {
     let value = src.read(cpu);
+    // println!("Pushing address 0x{:04X} to stack", value);
     cpu.push16(value);
     Timing::Normal
 }
 
 pub fn jp<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
+    let addr = target.read(cpu);
     if cond.eval(cpu) {
-        let addr = target.read(cpu);
         cpu.registers.pc = addr;
         return Timing::Conditionnal;
     }
@@ -417,7 +422,7 @@ pub fn jp<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
 pub fn call<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
     if cond.eval(cpu) {
         let addr = target.read(cpu);
-        push(cpu, Reg16::PC);
+        push(cpu, Reg16::PC); 
         cpu.registers.pc = addr;
         return Timing::Conditionnal;
     }
