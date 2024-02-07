@@ -18,7 +18,7 @@ pub trait MemoryHandler {
 
 #[allow(unused)]
 pub struct Mmu {
-    handlers: BTreeMap<u16, Vec<Rc<RefCell<dyn MemoryHandler>>>>,
+    pub handlers: BTreeMap<u16, Vec<Rc<RefCell<dyn MemoryHandler>>>>,
     memory: [u8; 0xffff],
     pub interrupts_enable: u8,
     pub interrupts_flags: u8,
@@ -62,7 +62,10 @@ impl Mmu {
                     }
                 }
             }
-            None => /* println!("[MMU] No explicit handler for address 0x{:04x}", addr) */(),
+            None => {
+                // #[cfg(feature="debug")]
+                // println!("[MMU] No explicit handler for address 0x{:04x}", addr);
+            }
         };
 
         match addr {
@@ -77,6 +80,9 @@ impl Mmu {
         match self.handlers.get(&addr) {
             Some(handlers) => {
                 for handler in handlers {
+                    if addr == 0xff0f {
+                        eprintln!("Hello {}", value);
+                    }
                     match handler.borrow_mut().write(self, addr, value) {
                         MemoryWrite::Replace(v) => {
                             self.memory[addr as usize] = v;

@@ -239,6 +239,7 @@ pub fn daa(cpu: &mut Cpu) -> Timing {
             a = a.wrapping_sub(0x06);
         }
     }
+    cpu.registers.a = a;
     cpu.registers.f.zero = a == 0;
     cpu.registers.f.half_carry = false;
 
@@ -278,46 +279,67 @@ pub fn halt(cpu: &mut Cpu) -> Timing {
 pub fn adc<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: S) -> Timing {
     let value_src = src.read(cpu);
     let value_dest = dest.read(cpu);
-    let (_result,_carry) = value_dest.overflowing_add(value_src);
-    let (result, carry) = value_dest.overflowing_add(cpu.registers.f.carry as u8);
+    let c = cpu.registers.f.carry as u8;
 
-    dest.write(cpu, result);
+    let (result,carry) = value_dest.overflowing_add(value_src);
+    let (result, carry_c) = result.overflowing_add(c);
 
-    cpu.registers.f.carry = carry;
+    dest.write(cpu, result as u8);
+
+    cpu.registers.f.carry = carry || carry_c;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = (value_src & 0x0F) + (value_dest & 0x0F) > 0xF;
+    cpu.registers.f.half_carry = (value_dest & 0x0F) + (value_src & 0x0F) + c > 0xF;
     cpu.registers.f.subtract = false;
+
+    // dest.write(cpu, r as u8);
+    
+    // cpu.registers.f.zero = (r as u8) == 0;
+    // cpu.registers.f.subtract = false;
+    // cpu.registers.f.half_carry = ((a & 0x0f) + (b & 0x0f) + c) > 0x0f;
+    // cpu.registers.f.carry = result > 0x00ff;
 
     Timing::Normal
 }
 
 pub fn sub<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: S) -> Timing {
-    let value_src = src.read(cpu);
-    let value_dest = dest.read(cpu);
-    let (result, carry) = value_dest.overflowing_sub(value_src);
+    let b = src.read(cpu);
+    let a = dest.read(cpu);
+    let (result, carry) = a.overflowing_sub(b);
 
     dest.write(cpu, result);
 
     cpu.registers.f.carry = carry;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = (value_src & 0x0F) + (value_dest & 0x0F) > 0xF;
+    cpu.registers.f.half_carry = ((a ^ b ^ result) & 0x10) != 0;
     cpu.registers.f.subtract = true;
 
     Timing::Normal
 }
 
 pub fn sbc<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: S) -> Timing {
-    let value_src = src.read(cpu);
-    let value_dest = dest.read(cpu);
-    let (_result, _carry) = value_dest.overflowing_sub(value_src);
-    let (result, carry) = value_dest.overflowing_sub(cpu.registers.f.carry as u8);
+    let a = dest.read(cpu);
+    let b = src.read(cpu);
+    let c = cpu.registers.f.carry as u8;
+    let (result, carry) = a.overflowing_sub(b);
+    let (result, carry_c) = result.overflowing_sub(c);
+    // let result = a.wrapping_sub(b).wrapping_sub(c);
+    dest.write(cpu, result as u8);
 
-    dest.write(cpu, result);
-
-    cpu.registers.f.carry = carry;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = (value_src & 0x0F) + (value_dest & 0x0F) > 0xF;
-    cpu.registers.f.subtract = false;
+    cpu.registers.f.subtract = true;
+    cpu.registers.f.carry = carry || carry_c;
+    cpu.registers.f.half_carry = ((a ^ b ^ c ^ result) & 0x10) != 0;
+    // let value_src = src.read(cpu);
+    // let value_dest = dest.read(cpu);
+    // let c = cpu.registers.f.carry as u8;
+
+
+    // dest.write(cpu, result);
+
+    // cpu.registers.f.carry = carry || carry_c;
+    // cpu.registers.f.zero = result == 0;
+    // cpu.registers.f.half_carry = (result & 0x0F) > (a & 0x0F);
+    // cpu.registers.f.subtract = true;
 
     Timing::Normal
 }
@@ -370,16 +392,20 @@ pub fn or<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: 
     Timing::Normal
 }
 
-pub fn cp<D: Dst<u8> + Src<u8>, S: Src<u8>>(cpu: &mut Cpu, dest: D, src: S) -> Timing {
-    let a = src.read(cpu);
-    let b = dest.read(cpu);
+pub fn cp<S: Src<u8>>(cpu: &mut Cpu, src: S) -> Timing {
+    let b = src.read(cpu);
+    let a = cpu.registers.a;
 
-    let (result, carry) = b.overflowing_sub(a);
+    // println!("Value B {:02X}", b);
+    // println!("Before {}", cpu.registers);
+
+    let (result, carry) = a.overflowing_sub(b);
 
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.carry = carry;
-    cpu.registers.f.half_carry = (a & 0x0F) + (b & 0x0F) > 0xF;
     cpu.registers.f.subtract = true;
+    cpu.registers.f.half_carry = (result & 0xf) > (a & 0xf);
+    cpu.registers.f.carry = carry;
+    // panic!("After {}", cpu.registers);
 
     Timing::Normal
 }
@@ -422,7 +448,9 @@ pub fn jp<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
 pub fn call<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
     if cond.eval(cpu) {
         let addr = target.read(cpu);
-        push(cpu, Reg16::PC); 
+        push(cpu, Reg16::PC);
+        #[cfg(feature="debug")]
+        println!("Calling function at 0x{:04X}", addr);
         cpu.registers.pc = addr;
         return Timing::Conditionnal;
     }
@@ -485,7 +513,7 @@ pub fn swap<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn sra<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    let result = (value & 0x80) | value >> 1;
+    let result = (value & 0x80) | (value >> 1);
     loc.write(cpu, value);
 
     cpu.registers.f.zero = result == 0;
@@ -497,11 +525,11 @@ pub fn sra<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn sla<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    let result = (value & 0x80) | ((value << 1) & !(0x80));
+    let result = value << 1;
     loc.write(cpu, value);
 
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.carry = (value & 0x80) != 0;
     cpu.registers.f.half_carry = false;
     cpu.registers.f.subtract = false;
     Timing::Normal

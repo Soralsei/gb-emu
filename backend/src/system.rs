@@ -1,4 +1,5 @@
 use std::cell::{Ref, RefCell, RefMut};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::memory::mmu::{MemoryRead, MemoryWrite};
@@ -9,10 +10,10 @@ use super::memory::mmu::MemoryHandler;
 use super::cpu::cpu::Cpu;
 use super::cpu::interrupt::InterruptController;
 use super::cpu::timer::Timer;
+#[cfg(feature = "blaarg")]
+use super::debug::blaarg_spy::BlaargSpy;
 use super::memory::mmu::Mmu;
 use super::memory::serial::Serial;
-#[cfg(feature="blaarg")]
-use super::debug::blaarg_spy::BlaargSpy;
 
 #[derive(Clone)]
 struct IoMemoryHandler<T>(Rc<RefCell<T>>);
@@ -42,7 +43,7 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
     fn read(&self, mmu: &Mmu, address: u16) -> crate::memory::mmu::MemoryRead {
         match self.0.try_borrow_mut() {
             Ok(device) => return device.read(mmu, address),
-            Err(e) => eprintln!("Recursive write at 0x{:04X}: {}", address, e),
+            Err(e) => panic!("Recursive read at 0x{:04X}: {}", address, e),
         }
         MemoryRead::Pass
     }
@@ -50,13 +51,13 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
     fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> crate::memory::mmu::MemoryWrite {
         match self.0.try_borrow_mut() {
             Ok(mut device) => return device.write(mmu, address, value),
-            Err(e) => eprintln!("Recursive write at 0x{:04X}: {}", address, e),
+            Err(e) => panic!("Recursive write at 0x{:04X}: {}", address, e),
         }
         MemoryWrite::Block
     }
 }
 
-pub struct System{
+pub struct System {
     cpu: Cpu,
     interrupt_controller: Device<InterruptController>,
     timer: Device<Timer>,
@@ -66,28 +67,32 @@ pub struct System{
 impl System {
     pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>) -> Self {
         let interrupt_controller = Device::new(InterruptController::new());
-        let serial =  Device::new(Serial::new(interrupt_controller.borrow().request()));
+        let serial = Device::new(Serial::new(interrupt_controller.borrow().request()));
         let timer = Device::new(Timer::new(interrupt_controller.borrow().request()));
 
         let mut mmu = Mmu::new();
         let mbc = Device::new(Mbc::new(boot_rom, rom));
 
-        #[cfg(feature="blaarg")]
+        #[cfg(feature = "blaarg")]
         {
             println!("Added blaarg debug feature");
             let spy = IoMemoryHandler(Rc::new(RefCell::new(BlaargSpy())));
             mmu.add_handler((0xA000, 0xBFFF), spy);
         }
-        
+
         mmu.add_handler((0x0000, 0x7fff), mbc.handler());
         mmu.add_handler((0xff50, 0xff50), mbc.handler());
         mmu.add_handler((0xa000, 0xbfff), mbc.handler());
 
+        mmu.add_handler((0xFF01, 0xFF02), serial.handler());
+        mmu.add_handler((0xFF04, 0xFF07), timer.handler());
+
         mmu.add_handler((0xff0f, 0xff0f), interrupt_controller.handler());
         mmu.add_handler((0xffff, 0xffff), interrupt_controller.handler());
 
-        mmu.add_handler((0xFF01, 0xFF02), serial.handler());
-        mmu.add_handler((0xFF04, 0xFF07), timer.handler());
+        // for (addr, handlers) in mmu.handlers.iter() {
+        //     println!("0x{:04X} : {:?}", addr, handlers.len());
+        // }
         let cpu = Cpu::new(mmu);
         Self {
             cpu,
@@ -98,7 +103,8 @@ impl System {
     }
 
     pub fn step(&mut self) {
-        let elapsed = self.cpu.step(self.interrupt_controller.borrow_mut());
+        let mut elapsed = self.cpu.execute_instruction() as u16;
+        elapsed += self.cpu.handle_interrupts(self.interrupt_controller.borrow_mut()) as u16;
         self.timer.borrow_mut().step(elapsed);
         self.serial.borrow_mut().step(elapsed);
     }

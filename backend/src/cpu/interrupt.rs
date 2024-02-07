@@ -153,7 +153,7 @@ impl MemoryHandler for InterruptController {
             0xffff => MemoryRead::Replace(self.enable.borrow().get()),
             0xff0f => MemoryRead::Replace(self.flags.borrow().get()),
             _ => {
-                println!("IC received weird write to address 0x{:04X}", address);
+                println!("IC received weird read to address 0x{:04X}", address);
                 MemoryRead::Pass
             }
         }

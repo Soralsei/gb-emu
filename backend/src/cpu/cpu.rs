@@ -1,7 +1,7 @@
 use std::cell::RefMut;
 
 use super::instructions::{Instruction, Opcode, Timing, NOP};
-use super::interrupt::InterruptController;
+use super::interrupt::{self, InterruptController};
 use super::registers::{Reg16, Reg8, Registers};
 use crate::memory::mmu::Mmu;
 
@@ -177,17 +177,12 @@ impl Cpu {
         }
     }
 
-    pub fn step(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u16 {
-        (self.handle_interrupts(interrupt_controller) + self.execute_instruction()).into()
-        // Do extra work ?
-    }
-
-    fn execute_instruction(&mut self) -> u8 {
-        if self.registers.sp >= 0xe000 && self.registers.sp <= 0xefff {
-            panic!("Huh ? {}", self.registers);
+    pub fn execute_instruction(&mut self) -> u8 {
+        if self.halted {
+            return 4;
         }
-        let opcode = if !self.halted { self.fetch_u8() } else { 0x00 };
-        
+
+        let opcode = self.fetch_u8();
         let op = match opcode {
             0xCB => Opcode::Prefixed(self.fetch_u8()),
             _ => Opcode::Unprefixed(opcode),
@@ -203,12 +198,10 @@ impl Cpu {
                 &NOP
             }
         };
+
         #[cfg(feature="debug")]
         {
             println!("Executing {} at address 0x{:04X}", instruction.mnemonic, self.registers.pc - 1);
-            if self.registers.pc == 0xdef9 {
-                // panic!("aaaaaaa {}", self.registers);
-            }
         }
         let timing = (instruction.execute)(self);
 
@@ -221,11 +214,16 @@ impl Cpu {
         }
     }
 
-    fn handle_interrupts(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u8 {
+    pub fn handle_interrupts(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u8 {
         // TODO: implement halt bug
-        if !self.ime {
-            // if self.halt...
-            return 0;
+        if self.halted {
+            if let Some(_) = interrupt_controller.peek() {
+                self.halted = false;
+            }
+            if !self.ime {
+                
+                return 0;
+            }
         }
         let value = interrupt_controller.consume();
         let value = match value {
