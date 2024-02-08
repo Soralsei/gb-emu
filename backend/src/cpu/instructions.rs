@@ -1,5 +1,7 @@
 #![allow(unused)]
+use std::io::stdin;
 use std::ops::{Shl, Shr};
+use std::ptr::null;
 
 use super::cpu::{self, Cpu, DMem, Dst, Imem16, Imem8, Mem, Src};
 use super::operations::*;
@@ -1419,9 +1421,9 @@ impl Instruction {
                 conditional_c_cycles: None,
                 mnemonic: "ADD SP,N",
                 execute: |cpu: &mut Cpu| {
-                    println!("Before {}", cpu.registers);
-                    let test = add_sp(cpu, Imem8);
-                    println!("After {}", cpu.registers);
+                    let test = add_sp(cpu);
+                    #[cfg(feature="debug")]
+                    stdin().read_line(&mut String::from(""));
                     test
                 },
             }),
@@ -1434,7 +1436,7 @@ impl Instruction {
             0xEA => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
-                mnemonic: "LD NN,A",
+                mnemonic: "LD (NN),A",
                 execute: |cpu: &mut Cpu| ld(cpu, Mem(Imem16), Reg8::A),
             }),
             0xEE => Some(&Instruction {

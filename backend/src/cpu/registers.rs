@@ -23,10 +23,12 @@ impl std::fmt::Display for Flags {
 
 impl std::convert::From<&Flags> for u8 {
     fn from(flag: &Flags) -> u8 {
-        (flag.zero as u8) << ZERO_FLAG
-            | (flag.subtract as u8) << SUB_FLAG
-            | (flag.half_carry as u8) << HALF_CARRY_FLAG
-            | (flag.carry as u8) << CARRY_FLAG
+        let mut res = 0;
+        res |= (flag.zero as u8) << ZERO_FLAG;
+        res |= (flag.subtract as u8) << SUB_FLAG;
+        res |= (flag.half_carry as u8) << HALF_CARRY_FLAG;
+        res |= (flag.carry as u8) << CARRY_FLAG;
+        res & 0xF0
     }
 }
 
@@ -146,34 +148,34 @@ impl Registers {
     }
 
     #[inline(always)]
-    fn single_to_double(&self, a: u8, b: u8) -> u16 {
+    fn single_to_double(a: u8, b: u8) -> u16 {
         (a as u16) << 8 | (b as u16)
     }
 
     #[inline(always)]
     fn af(&self) -> u16 {
-        self.single_to_double(self.a, u8::from(&self.f))
+        Self::single_to_double(self.a, u8::from(&self.f))
     }
 
     #[inline(always)]
     fn bc(&self) -> u16 {
-        self.single_to_double(self.b, self.c)
+        Self::single_to_double(self.b, self.c)
     }
 
     #[inline(always)]
     fn de(&self) -> u16 {
-        self.single_to_double(self.d, self.e)
+        Self::single_to_double(self.d, self.e)
     }
 
     #[inline(always)]
     fn hl(&self) -> u16 {
-        self.single_to_double(self.h, self.l)
+        Self::single_to_double(self.h, self.l)
     }
 
     #[inline(always)]
     fn set_af(&mut self, value: u16) {
         self.a = (value >> 8) as u8;
-        self.f = Flags::from((value & 0xFF) as u8);
+        self.f = Flags::from((value & 0xF0) as u8);
     }
 
     #[inline(always)]

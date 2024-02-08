@@ -80,9 +80,6 @@ impl Mmu {
         match self.handlers.get(&addr) {
             Some(handlers) => {
                 for handler in handlers {
-                    if addr == 0xff0f {
-                        eprintln!("Hello {}", value);
-                    }
                     match handler.borrow_mut().write(self, addr, value) {
                         MemoryWrite::Replace(v) => {
                             self.memory[addr as usize] = v;

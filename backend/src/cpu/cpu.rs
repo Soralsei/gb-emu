@@ -1,4 +1,5 @@
 use std::cell::RefMut;
+use std::io::stdin;
 
 use super::instructions::{Instruction, Opcode, Timing, NOP};
 use super::interrupt::{self, InterruptController};
@@ -35,8 +36,9 @@ impl Dst<u8> for Reg8 {
 impl Dst<u16> for Reg16 {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u16) {
+        #[cfg(feature="debug")]
         if let Reg16::SP = self {
-            // println!("Writing 0x{:04X} to SP", val);
+            println!("Writing 0x{:04X} to SP", val);
         }
         cpu.registers.write_u16(self, val)
     }
@@ -60,7 +62,8 @@ impl Src<u8> for Imem8 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u8 {
         let value = cpu.fetch_u8();
-        // println!("Fetched value 0x{:02X} from immediate memory", value);
+        #[cfg(feature="debug")]
+        println!("Fetched value 0x{:02X} from immediate memory", value);
         value
     }
 }
@@ -69,7 +72,8 @@ impl Src<u16> for Imem16 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u16 {
         let value = cpu.fetch_u16();
-        // println!("Fetched value 0x{:04X} from immediate memory", value);
+        #[cfg(feature="debug")]
+        println!("Fetched value 0x{:04X} from immediate memory", value);
         value
     }
 }
@@ -98,6 +102,9 @@ impl Dst<u8> for Mem<Reg16> {
     fn write(self, cpu: &mut Cpu, val: u8) {
         let Mem(reg) = self;
         let addr = reg.read(cpu);
+        // if let Reg16::HL = reg {
+        //     eprintln!("Writing {:02X} to 0x{:04X}", val, addr);
+        // }
         cpu.mmu.write(addr, val);
     }
 }
@@ -118,7 +125,12 @@ impl Dst<u8> for Mem<Imem16> {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, value: u8) {
         let Mem(loc) = self;
+
         let addr = loc.read(cpu);
+        if addr == 0xDEF8 || addr == 0xDEF9{
+            println!("Writing value 0x{:02X} to 0x{:04X}, {}", value, addr, cpu.registers);
+            stdin().read_line(&mut String::with_capacity(1)).unwrap();
+        }
         cpu.mmu.write(addr, value);
     }
 }
@@ -272,8 +284,8 @@ impl Cpu {
         let lsb = (value & 0xFF) as u8;
         let msb = (value >> 8) as u8;
         // println!("pushing bytes {:02X} and {:02X} to stack pointer at {:04X}", lsb, msb, self.registers.sp);
-        self.push(lsb);
         self.push(msb);
+        self.push(lsb);
         // println!("{}", self.registers);
     }
 
@@ -287,8 +299,8 @@ impl Cpu {
     #[inline(always)]
     pub fn pop16(&mut self) -> u16 {
         // println!("SP before : 0x{:04X}", self.registers.sp);
-        let msb: u16 = self.pop() as u16;
         let lsb: u16 = self.pop() as u16;
+        let msb: u16 = self.pop() as u16;
         // println!("popped bytes {:02X} and {:02X} from stack", lsb, msb);
         (msb << 8) | lsb
     }
