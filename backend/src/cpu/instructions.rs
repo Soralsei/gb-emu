@@ -1508,7 +1508,7 @@ impl Instruction {
             0xFA => Some(&Instruction {
                 c_cycles: 16,
                 conditional_c_cycles: None,
-                mnemonic: "LD A,NN",
+                mnemonic: "LD A,(NN)",
                 execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, Mem(Imem16)),
             }),
             0xFB => Some(&Instruction {

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::memory::mmu::{Mmu, MemoryHandler, MemoryRead, MemoryWrite};
+use crate::memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
 
 const VBLANK: u8 = 0x1;
 const LCD: u8 = 0x2;
@@ -65,6 +65,7 @@ impl InterruptRequest {
 
     pub fn vblank(&mut self, value: bool) {
         self.request.borrow_mut().vblank = value;
+        #[cfg(feature = "debug")]
         if value {
             println!("VBlank requested");
         }
@@ -72,6 +73,7 @@ impl InterruptRequest {
 
     pub fn lcd(&mut self, value: bool) {
         self.request.borrow_mut().lcd = value;
+        #[cfg(feature = "debug")]
         if value {
             println!("LCD interrupt requested");
         }
@@ -79,6 +81,7 @@ impl InterruptRequest {
 
     pub fn timer(&mut self, value: bool) {
         self.request.borrow_mut().timer = value;
+        #[cfg(feature = "debug")]
         if value {
             println!("Timer interrupt requested");
         }
@@ -86,6 +89,7 @@ impl InterruptRequest {
 
     pub fn serial(&mut self, value: bool) {
         self.request.borrow_mut().serial = value;
+        #[cfg(feature = "debug")]
         if value {
             println!("serial interrupt requested");
         }
@@ -93,6 +97,7 @@ impl InterruptRequest {
 
     pub fn joypad(&mut self, value: bool) {
         self.request.borrow_mut().joypad = value;
+        #[cfg(feature = "debug")]
         if value {
             println!("Joypad interrupt requested");
         }
@@ -153,18 +158,14 @@ impl MemoryHandler for InterruptController {
             0xffff => MemoryRead::Replace(self.enable.borrow().get()),
             0xff0f => MemoryRead::Replace(self.flags.borrow().get()),
             _ => {
+                #[cfg(feature = "debug")]
                 println!("IC received weird read to address 0x{:04X}", address);
                 MemoryRead::Pass
             }
         }
     }
 
-    fn write(
-        &mut self,
-        _: &Mmu,
-        address: u16,
-        value: u8,
-    ) -> MemoryWrite {
+    fn write(&mut self, _: &Mmu, address: u16, value: u8) -> MemoryWrite {
         match address {
             0xffff => {
                 self.enable.borrow_mut().set(value);
@@ -175,6 +176,7 @@ impl MemoryHandler for InterruptController {
                 MemoryWrite::Block
             }
             _ => {
+                #[cfg(feature = "debug")]
                 println!("IC received weird write to address 0x{:04X}", address);
                 MemoryWrite::Pass
             }

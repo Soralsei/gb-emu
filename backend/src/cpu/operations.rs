@@ -198,7 +198,6 @@ pub fn add16<D: Dst<u16> + Src<u16> + Copy, S: Src<u16>>(cpu: &mut Cpu, dest: D,
 
 pub fn offset_sp(cpu: &mut Cpu) -> u16 {
     let a = (Imem8.read(cpu) as i8) as i16;
-    println!("Before {}, value to add {:02X}", cpu.registers, a);
     let b = cpu.registers.sp as i16;
     let result = b.wrapping_add(a);
 
@@ -208,21 +207,11 @@ pub fn offset_sp(cpu: &mut Cpu) -> u16 {
     cpu.registers.f.carry = ((a ^ b ^ result) & 0x100) != 0;
 
     result as u16
-
-    // let offset = (Imem8.read(cpu) as i8) as i32;
-    // let sp = (cpu.registers.sp as i16) as i32;
-    // let r = sp + offset;
-    // cpu.registers.f.zero = false;
-    // cpu.registers.f.subtract = false;
-    // cpu.registers.f.carry = ((sp ^ offset ^ (r & 0xffff)) & 0x100) == 0x100;
-    // cpu.registers.f.half_carry = ((sp ^ offset ^ (r & 0xffff)) & 0x10) == 0x10;
-    // r as u16
 }
 
 pub fn add_sp(cpu: &mut Cpu) -> Timing {
     let result = offset_sp(cpu);
     cpu.registers.sp = result;
-    println!("After {}", cpu.registers);
 
     Timing::Normal
 }
@@ -436,9 +425,6 @@ pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
         #[cfg(feature = "debug")]
         println!("Returning to address 0x{:04X}", pc);
         cpu.registers.pc = pc;
-        if (pc >= 0xd000) {
-            panic!();
-        }
         return Timing::Conditionnal;
     }
     Timing::Normal
@@ -469,8 +455,8 @@ pub fn jp<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
 }
 
 pub fn call<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
+    let addr = target.read(cpu);
     if cond.eval(cpu) {
-        let addr = target.read(cpu);
         push(cpu, Reg16::PC);
         #[cfg(feature = "debug")]
         {

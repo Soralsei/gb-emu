@@ -127,10 +127,10 @@ impl Dst<u8> for Mem<Imem16> {
         let Mem(loc) = self;
 
         let addr = loc.read(cpu);
-        if addr == 0xDEF8 || addr == 0xDEF9{
-            println!("Writing value 0x{:02X} to 0x{:04X}, {}", value, addr, cpu.registers);
-            stdin().read_line(&mut String::with_capacity(1)).unwrap();
-        }
+        // if addr == 0xDEF8 || addr == 0xDEF9{
+        //     println!("Writing value 0x{:02X} to 0x{:04X}, {}", value, addr, cpu.registers);
+        //     stdin().read_line(&mut String::with_capacity(1)).unwrap();
+        // }
         cpu.mmu.write(addr, value);
     }
 }
@@ -232,10 +232,9 @@ impl Cpu {
             if let Some(_) = interrupt_controller.peek() {
                 self.halted = false;
             }
-            if !self.ime {
-                
-                return 0;
-            }
+        }
+        if !self.ime {
+            return 0;
         }
         let value = interrupt_controller.consume();
         let value = match value {

@@ -38,6 +38,7 @@ impl Serial {
             self.clock += elapsed_cycles as u32;
             // Transfer done
             if self.clock >= CYCLES_TO_SEND {
+                #[cfg(feature="debug")]
                 println!("Serial transfer done");
                 self.sb = self.recv;
                 self.transfer_enable = false;
