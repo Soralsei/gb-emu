@@ -1,3 +1,5 @@
+use crate::is_bit_set;
+
 use super::cpu::{Cpu, Dst, Imem8, Src};
 use super::instructions::Condition;
 use super::instructions::Timing;
@@ -108,7 +110,7 @@ pub fn rra(cpu: &mut Cpu) -> Timing {
 
 pub fn rlc<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    cpu.registers.f.carry = value & 0x80 != 0;
+    cpu.registers.f.carry = is_bit_set!(value, 7);
 
     let value = value.rotate_left(1);
 
@@ -123,7 +125,7 @@ pub fn rlc<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn rl<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    let c = value & 0x80 != 0;
+    let c = is_bit_set!(value, 7);
     let value = value.shl(1);
     let value = value | (cpu.registers.f.carry as u8);
 
@@ -139,7 +141,7 @@ pub fn rl<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn rr<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    let c = value & 0x01 != 0;
+    let c = is_bit_set!(value, 0);
     let value = value.shr(1);
     let value = value | ((cpu.registers.f.carry as u8) << 7);
 
@@ -155,7 +157,7 @@ pub fn rr<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn rrc<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    cpu.registers.f.carry = value & 0x01 != 0;
+    cpu.registers.f.carry = is_bit_set!(value, 0);
     let value = value.rotate_right(1);
 
     cpu.registers.f.zero = value == 0;
@@ -176,7 +178,8 @@ pub fn add<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src:
 
     cpu.registers.f.carry = carry;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = ((value_src ^ value_dest ^ result) & 0x10) != 0;
+    cpu.registers.f.half_carry = is_bit_set!((value_src ^ value_dest ^ result), 4);
+
     cpu.registers.f.subtract = false;
 
     Timing::Normal
@@ -190,7 +193,8 @@ pub fn add16<D: Dst<u16> + Src<u16> + Copy, S: Src<u16>>(cpu: &mut Cpu, dest: D,
     dest.write(cpu, result);
 
     cpu.registers.f.carry = carry;
-    cpu.registers.f.half_carry = ((a ^ b ^ result) & 0x1000) != 0;
+    cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ result), 12);
+;
     cpu.registers.f.subtract = false;
 
     Timing::Normal
@@ -203,8 +207,8 @@ pub fn offset_sp(cpu: &mut Cpu) -> u16 {
 
     cpu.registers.f.zero = false;
     cpu.registers.f.subtract = false;
-    cpu.registers.f.half_carry = ((a ^ b ^ result) & 0x10) != 0;
-    cpu.registers.f.carry = ((a ^ b ^ result) & 0x100) != 0;
+    cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ result), 4);
+    cpu.registers.f.carry = is_bit_set!((a ^ b ^ result), 8);
 
     result as u16
 }
@@ -298,15 +302,8 @@ pub fn adc<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src:
 
     cpu.registers.f.carry = carry || carry_c;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = ((a ^ b ^ c ^ result) & 0x10) != 0;
+    cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ c ^ result), 4);
     cpu.registers.f.subtract = false;
-
-    // dest.write(cpu, r as u8);
-
-    // cpu.registers.f.zero = (r as u8) == 0;
-    // cpu.registers.f.subtract = false;
-    // cpu.registers.f.half_carry = ((a & 0x0f) + (b & 0x0f) + c) > 0x0f;
-    // cpu.registers.f.carry = result > 0x00ff;
 
     Timing::Normal
 }
@@ -320,7 +317,7 @@ pub fn sub<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src:
 
     cpu.registers.f.carry = carry;
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.half_carry = ((a ^ b ^ result) & 0x10) != 0;
+    cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ result), 4);
     cpu.registers.f.subtract = true;
 
     Timing::Normal
@@ -332,23 +329,12 @@ pub fn sbc<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src:
     let c = cpu.registers.f.carry as u8;
     let (result, carry) = a.overflowing_sub(b);
     let (result, carry_c) = result.overflowing_sub(c);
-    // let result = a.wrapping_sub(b).wrapping_sub(c);
     dest.write(cpu, result as u8);
 
     cpu.registers.f.zero = result == 0;
     cpu.registers.f.subtract = true;
     cpu.registers.f.carry = carry || carry_c;
-    cpu.registers.f.half_carry = ((a ^ b ^ c ^ result) & 0x10) != 0;
-    // let value_src = src.read(cpu);
-    // let value_dest = dest.read(cpu);
-    // let c = cpu.registers.f.carry as u8;
-
-    // dest.write(cpu, result);
-
-    // cpu.registers.f.carry = carry || carry_c;
-    // cpu.registers.f.zero = result == 0;
-    // cpu.registers.f.half_carry = (result & 0x0F) > (a & 0x0F);
-    // cpu.registers.f.subtract = true;
+    cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ c ^ result), 4);
 
     Timing::Normal
 }
@@ -503,7 +489,7 @@ pub fn srl<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     loc.write(cpu, result);
 
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.carry = is_bit_set!(value, 0);
     cpu.registers.f.half_carry = false;
     cpu.registers.f.subtract = false;
     Timing::Normal
@@ -528,7 +514,7 @@ pub fn sra<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     loc.write(cpu, result);
 
     cpu.registers.f.zero = result == 0;
-    cpu.registers.f.carry = (value & 0x01) != 0;
+    cpu.registers.f.carry = is_bit_set!(value, 0);
     cpu.registers.f.half_carry = false;
     cpu.registers.f.subtract = false;
     Timing::Normal
@@ -543,14 +529,13 @@ pub fn sla<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     cpu.registers.f.zero = result == 0;
     cpu.registers.f.subtract = false;
     cpu.registers.f.half_carry = false;
-    cpu.registers.f.carry = (value & 0x80) != 0;
-    // panic!("After {}", cpu.registers);
+    cpu.registers.f.carry = is_bit_set!(value, 7);
     Timing::Normal
 }
 
 pub fn bit<L: Src<u8>>(cpu: &mut Cpu, bit: u8, loc: L) -> Timing {
     let value = loc.read(cpu);
-    cpu.registers.f.zero = value & (1 << bit) == 0;
+    cpu.registers.f.zero = !is_bit_set!(value, bit);
     cpu.registers.f.subtract = false;
     cpu.registers.f.half_carry = true;
 

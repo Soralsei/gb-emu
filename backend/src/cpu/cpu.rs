@@ -1,10 +1,10 @@
 use std::cell::RefMut;
-use std::io::stdin;
 
 use super::instructions::{Instruction, Opcode, Timing, NOP};
-use super::interrupt::{self, InterruptController};
+use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
 use crate::memory::mmu::Mmu;
+use crate::util::bit_operations::*;
 
 pub struct Imem8;
 pub struct Imem16;
@@ -114,8 +114,7 @@ impl Dst<u16> for Mem<Imem16> {
     fn write(self, cpu: &mut Cpu, val: u16) {
         let Mem(loc) = self;
         let addr = loc.read(cpu);
-        let lsb = val as u8;
-        let msb = (val >> 8) as u8;
+        let (msb, lsb) = word_to_bytes(val);
         cpu.mmu.write(addr, lsb);
         cpu.mmu.write(addr + 1, msb);
     }
@@ -266,9 +265,9 @@ impl Cpu {
 
     #[inline(always)]
     pub fn fetch_u16(&mut self) -> u16 {
-        let lsb = self.fetch_u8() as u16;
-        let msb = self.fetch_u8() as u16;
-        (msb << 8) | lsb
+        let lsb = self.fetch_u8();
+        let msb = self.fetch_u8();
+        bytes_to_word(msb, lsb)
     }
 
     #[inline(always)]
@@ -280,8 +279,7 @@ impl Cpu {
 
     #[inline(always)]
     pub fn push16(&mut self, value: u16) {
-        let lsb = (value & 0xFF) as u8;
-        let msb = (value >> 8) as u8;
+        let (msb, lsb) = word_to_bytes(value);
         // println!("pushing bytes {:02X} and {:02X} to stack pointer at {:04X}", lsb, msb, self.registers.sp);
         self.push(msb);
         self.push(lsb);
@@ -298,10 +296,10 @@ impl Cpu {
     #[inline(always)]
     pub fn pop16(&mut self) -> u16 {
         // println!("SP before : 0x{:04X}", self.registers.sp);
-        let lsb: u16 = self.pop() as u16;
-        let msb: u16 = self.pop() as u16;
+        let lsb = self.pop();
+        let msb = self.pop();
         // println!("popped bytes {:02X} and {:02X} from stack", lsb, msb);
-        (msb << 8) | lsb
+        bytes_to_word(msb, lsb)
     }
 
     #[inline(always)]

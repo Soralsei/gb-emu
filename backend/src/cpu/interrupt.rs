@@ -1,12 +1,15 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
+use crate::{
+    is_bit_set,
+    memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
+};
 
-const VBLANK: u8 = 0x1;
-const LCD: u8 = 0x2;
-const TIMER: u8 = 0x4;
-const SERIAL: u8 = 0x8;
-const JOYPAD: u8 = 0x10;
+const VBLANK: u8 = 0;
+const LCD: u8 = 1;
+const TIMER: u8 = 2;
+const SERIAL: u8 = 3;
+const JOYPAD: u8 = 4;
 
 #[derive(Default)]
 pub struct Interrupts {
@@ -19,11 +22,11 @@ pub struct Interrupts {
 
 impl Interrupts {
     fn set(&mut self, value: u8) {
-        self.vblank = value & VBLANK != 0;
-        self.lcd = value & LCD != 0;
-        self.timer = value & TIMER != 0;
-        self.serial = value & SERIAL != 0;
-        self.joypad = value & JOYPAD != 0;
+        self.vblank = is_bit_set!(value, VBLANK);
+        self.lcd = is_bit_set!(value, LCD);
+        self.timer = is_bit_set!(value, TIMER);
+        self.serial = is_bit_set!(value, SERIAL);
+        self.joypad = is_bit_set!(value, JOYPAD);
     }
     fn get(&self) -> u8 {
         u8::from(self)
@@ -33,11 +36,11 @@ impl Interrupts {
 impl std::convert::From<u8> for Interrupts {
     fn from(value: u8) -> Self {
         Self {
-            vblank: value & VBLANK != 0,
-            lcd: value & LCD != 0,
-            timer: value & TIMER != 0,
-            serial: value & SERIAL != 0,
-            joypad: value & JOYPAD != 0,
+            vblank: is_bit_set!(value, VBLANK),
+            lcd: is_bit_set!(value, LCD),
+            timer: is_bit_set!(value, TIMER),
+            serial: is_bit_set!(value, SERIAL),
+            joypad: is_bit_set!(value, JOYPAD),
         }
     }
 }

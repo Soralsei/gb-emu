@@ -1,7 +1,10 @@
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
-use crate::cpu::interrupt::InterruptRequest;
+use crate::{cpu::interrupt::InterruptRequest, is_bit_set};
 
 const CYCLES_TO_SEND: u32 = 512 * 8; // 8192Hz clock => 512 cpu cycles * 8 bits
+const CLOCK_SELECT: u8 = 0;
+const CLOCK_SPEED: u8 = 1;
+const TRANSFER_ENABLE: u8 = 7;
 
 pub struct Serial {
     interrupt_request: InterruptRequest,
@@ -52,9 +55,9 @@ impl Serial {
     }
 
     fn set_sc(&mut self, value: u8) {
-        self.transfer_enable = (value & 0x80) != 0;
-        self.clock_speed = (value & 0x02) != 0;
-        self.clock_select = (value & 0x01) != 0;
+        self.transfer_enable = is_bit_set!(value, TRANSFER_ENABLE);
+        self.clock_speed = is_bit_set!(value, CLOCK_SPEED);
+        self.clock_select = is_bit_set!(value, CLOCK_SELECT);
     }
 
     fn get_sc(&self) -> u8 {

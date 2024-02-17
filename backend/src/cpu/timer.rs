@@ -1,6 +1,6 @@
 use super::interrupt::InterruptRequest;
-use crate::memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite};
-
+use crate::{is_bit_set, memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite}};
+const TAC_ENABLE: u8 = 2;
 const DIV_CLOCKS: u16 = 256;
 const CLOCKS: [u16; 4] = [
     1024,
@@ -46,7 +46,7 @@ impl Timer {
             self.interrupt_request.timer(true);
         }
         // Check if TIMA is enabled
-        if self.tac & 0b100 == 0 {
+        if !is_bit_set!(self.tac, TAC_ENABLE) {
             return;
         }
 
@@ -88,7 +88,7 @@ impl MemoryHandler for Timer {
             0xFF07 => {
                 let old = self.tac;
                 self.tac = value & 0b111;
-                if self.tac & 0b100 != 0 && old & 0b100 != 0 {
+                if is_bit_set!(self.tac, TAC_ENABLE) && is_bit_set!(old, TAC_ENABLE) {
                     self.tima_clocks = 0;
                 }
             },

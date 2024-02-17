@@ -1,6 +1,11 @@
 #![allow(unused)]
+use crate::is_bit_set;
+
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite};
 use core::fmt;
+
+const CGB: u8 = 7;
+const CGB_ONLY: u8 = 6;
 
 trait MemoryBank {
     fn read(&self, address: u16) -> MemoryRead;
@@ -121,8 +126,8 @@ impl Cartridge {
         let ram_size = rom[0x149];
         Self {
             title,
-            cgb: rom[0x143] & 0x80 != 0,
-            cgb_only: rom[0x143] & 0x40 != 0,
+            cgb: is_bit_set!(rom[0x143], CGB),
+            cgb_only: is_bit_set!(rom[0x143], CGB_ONLY),
             mbc: MbcType::new(mbc_type, rom),
             rom_size,
             ram_size,

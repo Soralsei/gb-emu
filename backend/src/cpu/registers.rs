@@ -1,7 +1,12 @@
-const ZERO_FLAG: u8 = 7;
-const SUB_FLAG: u8 = 6;
-const HALF_CARRY_FLAG: u8 = 5;
-const CARRY_FLAG: u8 = 4;
+use crate::{
+    is_bit_set,
+    util::bit_operations::*,
+};
+
+const ZERO_BIT: u8 = 7;
+const SUB_BIT: u8 = 6;
+const HALF_CARRY_BIT: u8 = 5;
+const CARRY_BIT: u8 = 4;
 
 #[derive(Debug)]
 pub struct Flags {
@@ -24,10 +29,10 @@ impl std::fmt::Display for Flags {
 impl std::convert::From<&Flags> for u8 {
     fn from(flag: &Flags) -> u8 {
         let mut res = 0;
-        res |= (flag.zero as u8) << ZERO_FLAG;
-        res |= (flag.subtract as u8) << SUB_FLAG;
-        res |= (flag.half_carry as u8) << HALF_CARRY_FLAG;
-        res |= (flag.carry as u8) << CARRY_FLAG;
+        res |= (flag.zero as u8) << ZERO_BIT;
+        res |= (flag.subtract as u8) << SUB_BIT;
+        res |= (flag.half_carry as u8) << HALF_CARRY_BIT;
+        res |= (flag.carry as u8) << CARRY_BIT;
         res & 0xF0
     }
 }
@@ -35,10 +40,10 @@ impl std::convert::From<&Flags> for u8 {
 impl std::convert::From<u8> for Flags {
     fn from(flag: u8) -> Flags {
         Flags {
-            zero: (flag & (1 << ZERO_FLAG)) != 0,
-            subtract: (flag & (1 << SUB_FLAG)) != 0,
-            half_carry: (flag & (1 << HALF_CARRY_FLAG)) != 0,
-            carry: (flag & (1 << CARRY_FLAG)) != 0,
+            zero: is_bit_set!(flag, ZERO_BIT),
+            subtract: is_bit_set!(flag, SUB_BIT),
+            half_carry: is_bit_set!(flag, HALF_CARRY_BIT),
+            carry: is_bit_set!(flag, CARRY_BIT),
         }
     }
 }
@@ -148,52 +153,51 @@ impl Registers {
     }
 
     #[inline(always)]
-    fn single_to_double(a: u8, b: u8) -> u16 {
-        (a as u16) << 8 | (b as u16)
-    }
-
-    #[inline(always)]
     fn af(&self) -> u16 {
-        Self::single_to_double(self.a, u8::from(&self.f))
+        bytes_to_word(self.a, u8::from(&self.f))
     }
 
     #[inline(always)]
     fn bc(&self) -> u16 {
-        Self::single_to_double(self.b, self.c)
+        bytes_to_word(self.b, self.c)
     }
 
     #[inline(always)]
     fn de(&self) -> u16 {
-        Self::single_to_double(self.d, self.e)
+        bytes_to_word(self.d, self.e)
     }
 
     #[inline(always)]
     fn hl(&self) -> u16 {
-        Self::single_to_double(self.h, self.l)
+        bytes_to_word(self.h, self.l)
     }
 
     #[inline(always)]
     fn set_af(&mut self, value: u16) {
-        self.a = (value >> 8) as u8;
-        self.f = Flags::from((value & 0xF0) as u8);
+        let (a, f) = word_to_bytes(value);
+        self.a = a;
+        self.f = Flags::from(f & 0xF0);
     }
 
     #[inline(always)]
     fn set_bc(&mut self, value: u16) {
-        self.b = (value >> 8) as u8;
-        self.c = (value & 0xFF) as u8;
+        let (b, c) = word_to_bytes(value);
+        self.b = b;
+        self.c = c;
     }
 
     #[inline(always)]
     fn set_de(&mut self, value: u16) {
-        self.d = (value >> 8) as u8;
-        self.e = (value & 0xFF) as u8;
+        let (d, e) = word_to_bytes(value);
+        self.d = d;
+        self.e = e;
     }
 
     #[inline(always)]
     fn set_hl(&mut self, value: u16) {
-        self.h = (value >> 8) as u8;
-        self.l = (value & 0xFF) as u8;
+        let (h, l) = word_to_bytes(value);
+        self.h = h;
+        self.l = l;
     }
 }
 
