@@ -195,17 +195,7 @@ impl Cpu {
             0xCB => Opcode::Prefixed(self.fetch_u8()),
             _ => Opcode::Unprefixed(opcode),
         };
-        let instruction = match Instruction::get_instruction(op) {
-            Some(instruction) => instruction,
-            None => {
-                eprintln!(
-                    "Unknown opcode 0x{:04X} at address 0x{:04X}",
-                    opcode,
-                    self.registers.pc.wrapping_sub(1)
-                );
-                &NOP
-            }
-        };
+        let instruction = Instruction::from_opcode(op);
 
         #[cfg(feature = "debug")]
         {
@@ -224,14 +214,6 @@ impl Cpu {
                 Timing::Conditional => condition_cycles.taken,
             },
         }
-
-        // match timing {
-        //     Timing::Normal => instruction.c_cycles,
-        //     Timing::Conditionnal => match instruction.conditional_c_cycles {
-        //         Some(cycles) => cycles,
-        //         None => instruction.c_cycles,
-        //     },
-        // }
     }
 
     pub fn handle_interrupts(
