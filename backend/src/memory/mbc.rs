@@ -101,10 +101,6 @@ impl MemoryBank for MbcNone {
     }
 }
 
-fn decode_string(data: &[u8]) -> String {
-    String::from("")
-}
-
 struct Cartridge {
     title: String,
     cgb: bool,
@@ -120,12 +116,12 @@ fn checksum(rom: &[u8]) {
 
 impl Cartridge {
     pub fn new(rom: Vec<u8>) -> Self {
-        let title = decode_string(&rom[0x134..=0x142]);
+        let title = String::from_utf8_lossy(&rom[0x134..=0x142]);
         let mbc_type = rom[0x147];
         let rom_size = rom[0x148];
         let ram_size = rom[0x149];
         Self {
-            title,
+            title: title.to_string(),
             cgb: is_bit_set!(rom[0x143], CGB),
             cgb_only: is_bit_set!(rom[0x143], CGB_ONLY),
             mbc: MbcType::new(mbc_type, rom),

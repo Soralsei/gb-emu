@@ -3,7 +3,7 @@ use backend::system::System;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let f_rom = std::fs::read(&args[1]);
-    let mut rom = match f_rom {
+    let rom = match f_rom {
         Ok(r) => r,
         Err(e) => panic!("Unable to open file {}: {}", args[1], e),
     };
@@ -14,9 +14,6 @@ fn main() {
             Ok(br) => Some(br),
             Err(_) => None,
         };
-    }
-    for byte in rom[0x100..=0x14F].iter() {
-        print!("0x{:02X} ", byte);
     }
     let mut sys = System::new(boot_rom, rom);
     loop {
