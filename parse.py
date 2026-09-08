@@ -55,14 +55,14 @@ def get_function_call(instruction: str):
     function_name = instruction['operator']
     if function_name == 'stop':
         return " {cpu.stop(); Timing::Normal}"
-    else:
-        if len(params) > 1 and "16" in params[1] and function_name in arithmetic16:
-            function_name+='16'
-        elif len(params) <= 1 and function_name in jump :
-            params.append('Condition::Unconditional')
-        elif function_name in jump and not any(param in conditions for param in params):
-            params.insert(1, 'Condition::Unconditional')
-        params = ', '.join(params)
+
+    if len(params) > 1 and "16" in params[1] and function_name in arithmetic16:
+        function_name+='16'
+    elif len(params) <= 1 and function_name in jump :
+        params.append('Condition::Unconditional')
+    elif function_name in jump and not any(param in conditions for param in params):
+        params.insert(1, 'Condition::Unconditional')
+    params = ', '.join(params)
     return f"{function_name}({params})"
      
 

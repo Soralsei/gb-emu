@@ -2,7 +2,6 @@ use crate::cpu::interrupt::InterruptRequest;
 
 enum Mode {
     OAM,
-    
 }
 
 pub struct Ppu {

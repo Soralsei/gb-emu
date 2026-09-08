@@ -1,0 +1,114 @@
+// @generated
+#![allow(unused)]
+use std::io::stdin;
+use std::ops::{Shl, Shr};
+use std::ptr::null;
+
+use super::cpu::{self, Cpu, DMem, Dst, Imem16, Imem8, Mem, Src};
+use super::operations::*;
+use super::registers::{Reg16, Reg8};
+
+
+pub enum Opcode {
+    Unprefixed(u8),
+    Prefixed(u8),
+}
+
+pub enum Timing {
+    Normal,
+    Conditional,
+}
+
+pub enum Condition {
+    Unconditional,
+    NotZero,
+    Zero,
+    NotCarry,
+    Carry,
+}
+
+impl Condition {
+    pub fn eval(&self, cpu: &Cpu) -> bool {
+        match self {
+            Condition::Unconditional => true,
+            Condition::NotZero => !cpu.registers.f.zero,
+            Condition::Zero => cpu.registers.f.zero,
+            Condition::NotCarry => !cpu.registers.f.carry,
+            Condition::Carry => cpu.registers.f.carry,
+        }
+    }
+}
+
+
+#[derive(PartialEq)]
+pub struct ConditionCycles {
+    pub not_taken: usize,
+    pub taken: usize,
+}
+
+
+#[derive(PartialEq)]
+pub enum Cycles {
+    Unconditional(usize),
+    Conditional(ConditionCycles)
+}
+
+#[derive(PartialEq)]
+pub struct Instruction {
+    pub cycles: Cycles,
+    pub mnemonic: &'static str,
+    pub execute: fn(&mut Cpu) -> Timing,
+}
+
+pub const NOP: Instruction = Instruction {
+    cycles: Cycles::Unconditional(4),
+    mnemonic: "NOP",
+    execute: |_: &mut Cpu| nop(),
+};
+
+pub const ILLEGAL: Instruction = Instruction {
+    cycles: Cycles::Unconditional(4),
+    mnemonic: "ILL",
+    execute: |cpu: &mut Cpu| {
+        eprintln!(
+            "Unknown opcode at address 0x{:04X}",
+            cpu.registers.pc.wrapping_sub(1)
+        );
+        Timing::Normal
+    },
+};
+
+{% macro instruct_case(instruct) %}
+0x{{ instruct.code }} => &Instruction {
+    cycles: {{ instruct.cycles }},
+    mnemonic: "{{ instruct.mnemonic }}",
+    execute: {{ instruct.call }}
+},
+{% endmacro %}
+
+impl Instruction {
+    pub fn from_opcode(opcode: Opcode) -> Instruction {
+        match opcode {
+            Opcode::Unprefixed(op) => Instruction::from_opcode_unprefixed(op),
+            Opcode::Prefixed(op) => Instruction::from_opcode_prefixed(op),
+        }
+    }
+
+    fn from_opcode_unprefixed(opcode: u8) -> Instruction {
+        match opcode {
+            {% for instruct in instructions %}
+            {{ instruct_case(instruct) }}
+            {% endfor %}
+            _ => ILLEGAL,
+        }
+    }
+
+    fn from_opcode_prefixed(opcode: u8) -> Instruction {
+        match opcode {
+            {% for instruct in prefixed_instructions %}
+            {{ instruct_case(instruct) }}
+            {% endfor %}
+            _ => ILLEGAL,
+        }
+    }
+}

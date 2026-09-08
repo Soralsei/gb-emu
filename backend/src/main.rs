@@ -1,6 +1,3 @@
-use core::time;
-use std::thread::sleep;
-
 use backend::system::System;
 
 fn main() {
@@ -26,6 +23,5 @@ fn main() {
     let mut sys = System::new(boot_rom, rom);
     loop {
         sys.step();
-        // sleep(time::Duration::from_millis(0));
     }
 }

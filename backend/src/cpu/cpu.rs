@@ -3,6 +3,7 @@ use std::cell::RefMut;
 use super::instructions::{Instruction, Opcode, Timing, NOP};
 use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
+use crate::cpu::instructions::Cycles;
 use crate::memory::mmu::Mmu;
 use crate::util::bit_operations::*;
 
@@ -25,10 +26,6 @@ pub trait Dst<T> {
 impl Dst<u8> for Reg8 {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u8) {
-        
-        // if let Reg8::B = self {
-        //     panic!("Writing {:02X} to register B", val);
-        // }
         cpu.registers.write_u8(self, val)
     }
 }
@@ -188,7 +185,7 @@ impl Cpu {
         }
     }
 
-    pub fn execute_instruction(&mut self) -> u8 {
+    pub fn execute_instruction(&mut self) -> usize {
         if self.halted {
             return 4;
         }
@@ -204,7 +201,7 @@ impl Cpu {
                 eprintln!(
                     "Unknown opcode 0x{:04X} at address 0x{:04X}",
                     opcode,
-                    self.registers.pc - 1
+                    self.registers.pc.wrapping_sub(1)
                 );
                 &NOP
             }
@@ -216,13 +213,21 @@ impl Cpu {
         }
         let timing = (instruction.execute)(self);
 
-        match timing {
-            Timing::Normal => instruction.c_cycles,
-            Timing::Conditionnal => match instruction.conditional_c_cycles {
-                Some(cycles) => cycles,
-                None => instruction.c_cycles,
+        match &instruction.cycles {
+            Cycles::Unconditional(cycles) => *cycles,
+            Cycles::Conditional(condition_cycles) => match timing {
+                Timing::Normal => condition_cycles.not_taken,
+                Timing::Conditional => condition_cycles.taken,
             },
         }
+
+        // match timing {
+        //     Timing::Normal => instruction.c_cycles,
+        //     Timing::Conditionnal => match instruction.conditional_c_cycles {
+        //         Some(cycles) => cycles,
+        //         None => instruction.c_cycles,
+        //     },
+        // }
     }
 
     pub fn handle_interrupts(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u8 {
@@ -242,6 +247,8 @@ impl Cpu {
         };
         self.interrupt(value);
         self.halted = false;
+
+        // interrupt handling always consumes exactly 20 cycles
         20
     }
 
@@ -252,7 +259,7 @@ impl Cpu {
     #[allow(unused)]
     fn interrupt(&mut self, value: u8) {
         self.set_interrupts(false);
-        self.push16(self.registers.pc);
+        self.push_u16(self.registers.pc);
         self.registers.pc = value as u16;
     }
 
@@ -271,39 +278,39 @@ impl Cpu {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, value: u8) {
+    pub fn push_u8(&mut self, value: u8) {
         let new_sp = self.registers.sp.wrapping_sub(1);
         self.registers.sp = new_sp;
         self.mmu.write(new_sp, value);
     }
 
     #[inline(always)]
-    pub fn push16(&mut self, value: u16) {
+    pub fn push_u16(&mut self, value: u16) {
         let (msb, lsb) = word_to_bytes(value);
         // println!("pushing bytes {:02X} and {:02X} to stack pointer at {:04X}", lsb, msb, self.registers.sp);
-        self.push(msb);
-        self.push(lsb);
+        self.push_u8(msb);
+        self.push_u8(lsb);
         // println!("{}", self.registers);
     }
 
     #[inline(always)]
-    pub fn pop(&mut self) -> u8 {
+    pub fn pop_u8(&mut self) -> u8 {
         let sp = self.registers.sp;
         self.registers.sp = sp.wrapping_add(1);
         self.mmu.read(sp)
     }
 
     #[inline(always)]
-    pub fn pop16(&mut self) -> u16 {
+    pub fn pop_u16(&mut self) -> u16 {
         // println!("SP before : 0x{:04X}", self.registers.sp);
-        let lsb = self.pop();
-        let msb = self.pop();
+        let lsb = self.pop_u8();
+        let msb = self.pop_u8();
         // println!("popped bytes {:02X} and {:02X} from stack", lsb, msb);
         bytes_to_word(msb, lsb)
     }
 
     #[inline(always)]
     pub fn stop(&mut self) {
-        eprintln!("CPU stop not implemented");
+        eprintln!("CPU stop not yet implemented");
     }
 }

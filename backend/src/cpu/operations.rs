@@ -225,7 +225,7 @@ pub fn jr<S: Src<u8>>(cpu: &mut Cpu, cond: Condition, src: S) -> Timing {
     if cond.eval(cpu) {
         let offset = offset as i16;
         cpu.registers.pc = ((cpu.registers.pc as i16).wrapping_add(offset)) as u16;
-        Timing::Conditionnal
+        Timing::Conditional
     } else {
         Timing::Normal
     }
@@ -407,17 +407,17 @@ pub fn cp<S: Src<u8>>(cpu: &mut Cpu, src: S) -> Timing {
 
 pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
     if cond.eval(cpu) {
-        let pc = cpu.pop16();
+        let pc = cpu.pop_u16();
         #[cfg(feature = "debug")]
         println!("Returning to address 0x{:04X}", pc);
         cpu.registers.pc = pc;
-        return Timing::Conditionnal;
+        return Timing::Conditional;
     }
     Timing::Normal
 }
 
 pub fn pop<D: Dst<u16>>(cpu: &mut Cpu, dest: D) -> Timing {
-    let value = cpu.pop16();
+    let value = cpu.pop_u16();
     // println!("Writing {:04X}", value);
     dest.write(cpu, value);
 
@@ -427,7 +427,7 @@ pub fn pop<D: Dst<u16>>(cpu: &mut Cpu, dest: D) -> Timing {
 pub fn push<S: Src<u16>>(cpu: &mut Cpu, src: S) -> Timing {
     let value = src.read(cpu);
     // println!("Pushing address 0x{:04X} to stack", value);
-    cpu.push16(value);
+    cpu.push_u16(value);
     Timing::Normal
 }
 
@@ -435,7 +435,7 @@ pub fn jp<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
     let addr = target.read(cpu);
     if cond.eval(cpu) {
         cpu.registers.pc = addr;
-        return Timing::Conditionnal;
+        return Timing::Conditional;
     }
     Timing::Normal
 }
@@ -449,14 +449,14 @@ pub fn call<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
             println!("\nCalling function at 0x{:04X}", addr);
         }
         cpu.registers.pc = addr;
-        return Timing::Conditionnal;
+        return Timing::Conditional;
     }
     Timing::Normal
 }
 
 pub fn rst(cpu: &mut Cpu, src: u8) -> Timing {
     let pc = cpu.registers.pc;
-    cpu.push16(pc);
+    cpu.push_u16(pc);
     cpu.registers.pc = src as u16;
 
     Timing::Normal
