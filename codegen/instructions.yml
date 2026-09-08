@@ -2359,17 +2359,6 @@
   n: "-"
   h: "-"
   c: "-"
-- code: 203
-  operator: prefix
-  operands:
-    - cb
-  bits: 0
-  size: 1
-  time: 4
-  z: "-"
-  n: "-"
-  h: "-"
-  c: "-"
 - code: 204
   operator: call
   operands:

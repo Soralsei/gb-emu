@@ -1,8 +1,5 @@
 use std::cell::{Ref, RefCell, RefMut};
-use std::collections::HashSet;
 use std::rc::Rc;
-
-use crate::memory::mmu::{MemoryRead, MemoryWrite};
 
 use super::memory::mbc::Mbc;
 use super::memory::mmu::MemoryHandler;
@@ -45,7 +42,6 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
             Ok(device) => return device.read(mmu, address),
             Err(e) => panic!("Recursive read at 0x{:04X}: {}", address, e),
         }
-        MemoryRead::Pass
     }
 
     fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> crate::memory::mmu::MemoryWrite {
@@ -53,7 +49,6 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
             Ok(mut device) => return device.write(mmu, address, value),
             Err(e) => panic!("Recursive write at 0x{:04X}: {}", address, e),
         }
-        MemoryWrite::Block
     }
 }
 
@@ -90,9 +85,6 @@ impl System {
         mmu.add_handler((0xff0f, 0xff0f), interrupt_controller.handler());
         mmu.add_handler((0xffff, 0xffff), interrupt_controller.handler());
 
-        // for (addr, handlers) in mmu.handlers.iter() {
-        //     println!("0x{:04X} : {:?}", addr, handlers.len());
-        // }
         let cpu = Cpu::new(mmu);
         Self {
             cpu,
@@ -104,7 +96,9 @@ impl System {
 
     pub fn step(&mut self) {
         let mut elapsed = self.cpu.execute_instruction() as u16;
-        elapsed += self.cpu.handle_interrupts(self.interrupt_controller.borrow_mut()) as u16;
+        elapsed += self
+            .cpu
+            .handle_interrupts(self.interrupt_controller.borrow_mut()) as u16;
         self.timer.borrow_mut().step(elapsed);
         self.serial.borrow_mut().step(elapsed);
     }

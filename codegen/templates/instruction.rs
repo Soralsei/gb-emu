@@ -4,7 +4,7 @@ use std::io::stdin;
 use std::ops::{Shl, Shr};
 use std::ptr::null;
 
-use super::cpu::{self, Cpu, DMem, Dst, Imem16, Imem8, Mem, Src};
+use super::cpu::{self, Cpu, DMem, Dst, Imm16, Imm8, Mem, Src};
 use super::operations::*;
 use super::registers::{Reg16, Reg8};
 
@@ -78,14 +78,6 @@ pub const ILLEGAL: Instruction = Instruction {
     },
 };
 
-{% macro instruct_case(instruct) %}
-0x{{ instruct.code }} => &Instruction {
-    cycles: {{ instruct.cycles }},
-    mnemonic: "{{ instruct.mnemonic }}",
-    execute: {{ instruct.call }}
-},
-{% endmacro %}
-
 impl Instruction {
     pub fn from_opcode(opcode: Opcode) -> Instruction {
         match opcode {
@@ -96,18 +88,18 @@ impl Instruction {
 
     fn from_opcode_unprefixed(opcode: u8) -> Instruction {
         match opcode {
-            {% for instruct in instructions %}
-            {{ instruct_case(instruct) }}
-            {% endfor %}
+{%- for instruct in instructions %}
+{{- <instruct_case instruct={instruct} /> }}
+{%- endfor %}
             _ => ILLEGAL,
         }
     }
 
     fn from_opcode_prefixed(opcode: u8) -> Instruction {
         match opcode {
-            {% for instruct in prefixed_instructions %}
-            {{ instruct_case(instruct) }}
-            {% endfor %}
+{%- for instruct in prefixed_instructions %}
+{{- <instruct_case instruct={instruct} /> }}
+{%- endfor %}
             _ => ILLEGAL,
         }
     }

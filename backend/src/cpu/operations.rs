@@ -1,6 +1,6 @@
 use crate::is_bit_set;
 
-use super::cpu::{Cpu, Dst, Imem8, Src};
+use super::cpu::{Cpu, Dst, Imm8, Src};
 use super::instructions::Condition;
 use super::instructions::Timing;
 use super::registers::{Reg16, Reg8};
@@ -194,14 +194,13 @@ pub fn add16<D: Dst<u16> + Src<u16> + Copy, S: Src<u16>>(cpu: &mut Cpu, dest: D,
 
     cpu.registers.f.carry = carry;
     cpu.registers.f.half_carry = is_bit_set!((a ^ b ^ result), 12);
-;
     cpu.registers.f.subtract = false;
 
     Timing::Normal
 }
 
 pub fn offset_sp(cpu: &mut Cpu) -> u16 {
-    let a = (Imem8.read(cpu) as i8) as i16;
+    let a = (Imm8.read(cpu) as i8) as i16;
     let b = cpu.registers.sp as i16;
     let result = b.wrapping_add(a);
 

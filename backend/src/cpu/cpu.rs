@@ -7,8 +7,8 @@ use crate::cpu::instructions::Cycles;
 use crate::memory::mmu::Mmu;
 use crate::util::bit_operations::*;
 
-pub struct Imem8;
-pub struct Imem16;
+pub struct Imm8;
+pub struct Imm16;
 
 #[derive(Copy, Clone)]
 pub struct Mem<T: Src<u16>>(pub T);
@@ -33,7 +33,7 @@ impl Dst<u8> for Reg8 {
 impl Dst<u16> for Reg16 {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u16) {
-        #[cfg(feature="debug")]
+        #[cfg(feature = "debug")]
         if let Reg16::SP = self {
             println!("Writing 0x{:04X} to SP", val);
         }
@@ -55,21 +55,21 @@ impl Src<u16> for Reg16 {
     }
 }
 
-impl Src<u8> for Imem8 {
+impl Src<u8> for Imm8 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u8 {
         let value = cpu.fetch_u8();
-        #[cfg(feature="debug")]
+        #[cfg(feature = "debug")]
         println!("Fetched value 0x{:02X} from immediate memory", value);
         value
     }
 }
 
-impl Src<u16> for Imem16 {
+impl Src<u16> for Imm16 {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u16 {
         let value = cpu.fetch_u16();
-        #[cfg(feature="debug")]
+        #[cfg(feature = "debug")]
         println!("Fetched value 0x{:04X} from immediate memory", value);
         value
     }
@@ -84,7 +84,7 @@ impl Src<u8> for Mem<Reg16> {
     }
 }
 
-impl Src<u8> for Mem<Imem16> {
+impl Src<u8> for Mem<Imm16> {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u8 {
         let Mem(imm) = self;
@@ -106,7 +106,7 @@ impl Dst<u8> for Mem<Reg16> {
     }
 }
 
-impl Dst<u16> for Mem<Imem16> {
+impl Dst<u16> for Mem<Imm16> {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, val: u16) {
         let Mem(loc) = self;
@@ -117,7 +117,7 @@ impl Dst<u16> for Mem<Imem16> {
     }
 }
 
-impl Dst<u8> for Mem<Imem16> {
+impl Dst<u8> for Mem<Imm16> {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, value: u8) {
         let Mem(loc) = self;
@@ -140,7 +140,7 @@ impl Src<u8> for DMem<Reg8> {
     }
 }
 
-impl Src<u8> for DMem<Imem8> {
+impl Src<u8> for DMem<Imm8> {
     #[inline(always)]
     fn read(self, cpu: &mut Cpu) -> u8 {
         let DMem(imm) = self;
@@ -158,7 +158,7 @@ impl Dst<u8> for DMem<Reg8> {
     }
 }
 
-impl Dst<u8> for DMem<Imem8> {
+impl Dst<u8> for DMem<Imm8> {
     #[inline(always)]
     fn write(self, cpu: &mut Cpu, value: u8) {
         let DMem(imm) = self;
@@ -195,7 +195,7 @@ impl Cpu {
             0xCB => Opcode::Prefixed(self.fetch_u8()),
             _ => Opcode::Unprefixed(opcode),
         };
-        let instruction= match Instruction::get_instruction(op) {
+        let instruction = match Instruction::get_instruction(op) {
             Some(instruction) => instruction,
             None => {
                 eprintln!(
@@ -207,9 +207,13 @@ impl Cpu {
             }
         };
 
-        #[cfg(feature="debug")]
+        #[cfg(feature = "debug")]
         {
-            println!("Executing {} at address 0x{:04X}", instruction.mnemonic, self.registers.pc - 1);
+            println!(
+                "Executing {} at address 0x{:04X}",
+                instruction.mnemonic,
+                self.registers.pc - 1
+            );
         }
         let timing = (instruction.execute)(self);
 
@@ -230,7 +234,10 @@ impl Cpu {
         // }
     }
 
-    pub fn handle_interrupts(&mut self, interrupt_controller: RefMut<'_, InterruptController>) -> u8 {
+    pub fn handle_interrupts(
+        &mut self,
+        interrupt_controller: RefMut<'_, InterruptController>,
+    ) -> u8 {
         // TODO: implement halt bug
         if self.halted {
             if let Some(_) = interrupt_controller.peek() {

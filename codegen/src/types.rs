@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::path::PathBuf;
+use std::{num::ParseIntError, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,14 +31,6 @@ pub struct Instruction {
     pub c: String,
 }
 
-pub trait MnemonicEmitter {
-    fn to_mnemonic(&self) -> String;
-}
-
-pub trait RustEmitter {
-    fn to_rust(&self) -> String;
-}
-
 pub enum Reg8 {
     A,
     B,
@@ -50,6 +42,24 @@ pub enum Reg8 {
     L,
 }
 
+impl TryFrom<&str> for Reg8 {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "a" => Ok(Reg8::A),
+            "b" => Ok(Reg8::B),
+            "c" => Ok(Reg8::C),
+            "d" => Ok(Reg8::D),
+            "e" => Ok(Reg8::E),
+            "f" => Ok(Reg8::F),
+            "h" => Ok(Reg8::H),
+            "l" => Ok(Reg8::L),
+            _ => Err(format!("Unknown register '{}'", value)),
+        }
+    }
+}
+
 pub enum Reg16 {
     AF,
     BC,
@@ -59,62 +69,19 @@ pub enum Reg16 {
     PC,
 }
 
-impl MnemonicEmitter for Reg8 {
-    fn to_mnemonic(&self) -> String {
-        match self {
-            Reg8::A => "a",
-            Reg8::B => "b",
-            Reg8::C => "c",
-            Reg8::D => "d",
-            Reg8::E => "e",
-            Reg8::F => "f",
-            Reg8::H => "h",
-            Reg8::L => "l",
-        }
-        .to_string()
-    }
-}
-impl RustEmitter for Reg8 {
-    fn to_rust(&self) -> String {
-        match self {
-            Reg8::A => "Reg8::A",
-            Reg8::B => "Reg8::B",
-            Reg8::C => "Reg8::C",
-            Reg8::D => "Reg8::D",
-            Reg8::E => "Reg8::E",
-            Reg8::F => "Reg8::F",
-            Reg8::H => "Reg8::H",
-            Reg8::L => "Reg8::L",
-        }
-        .to_string()
-    }
-}
+impl TryFrom<&str> for Reg16 {
+    type Error = String;
 
-impl MnemonicEmitter for Reg16 {
-    fn to_mnemonic(&self) -> String {
-        match self {
-            Reg16::AF => "af",
-            Reg16::BC => "bc",
-            Reg16::DE => "de",
-            Reg16::HL => "hl",
-            Reg16::SP => "sp",
-            Reg16::PC => "pc",
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "af" => Ok(Reg16::AF),
+            "bc" => Ok(Reg16::BC),
+            "de" => Ok(Reg16::DE),
+            "hl" => Ok(Reg16::HL),
+            "sp" => Ok(Reg16::SP),
+            "pc" => Ok(Reg16::PC),
+            _ => Err(format!("Unknown 16 bits register '{}'", value)),
         }
-        .to_string()
-    }
-}
-
-impl RustEmitter for Reg16 {
-    fn to_rust(&self) -> String {
-        match self {
-            Reg16::AF => "Reg16::AF",
-            Reg16::BC => "Reg16::BC",
-            Reg16::DE => "Reg16::DE",
-            Reg16::HL => "Reg16::HL",
-            Reg16::SP => "Reg16::SP",
-            Reg16::PC => "Reg16::PC",
-        }
-        .to_string()
     }
 }
 
@@ -126,63 +93,81 @@ pub enum Condition {
     Carry,
 }
 
-impl MnemonicEmitter for Condition {
-    fn to_mnemonic(&self) -> String {
-        match self {
-            Condition::Unconditional => "",
-            Condition::NotZero => "nz",
-            Condition::Zero => "z",
-            Condition::NotCarry => "nc",
-            Condition::Carry => "c",
+impl TryFrom<&str> for Condition {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "nz" => Ok(Condition::NotZero),
+            "z" => Ok(Condition::Zero),
+            "nc" => Ok(Condition::NotCarry),
+            "cf" => Ok(Condition::Carry),
+            _ => Err(format!("Unknown condition {}", value)),
         }
-        .to_string()
     }
 }
 
-impl RustEmitter for Condition {
-    fn to_rust(&self) -> String {
-        match self {
-            Condition::Unconditional => "Condition::Unconditional",
-            Condition::NotZero => "Condition::NotZero",
-            Condition::Zero => "Condition::Zero",
-            Condition::NotCarry => "Condition::NotCarry",
-            Condition::Carry => "Condition::Carry",
-        }
-        .to_string()
-    }
-}
-
-enum Operand {
+pub enum Operand {
     R8(Reg8),
     R16(Reg16),
     Imm8,
+    Rel8,
     Imm16,
     Cond(Condition),
     Mem(Box<Operand>),     // (hl) (bc) (a16)
     HighMem(Box<Operand>), // (0xff00+c) (0xff00+a8)
     Bit(u8),               // "0".."7"
     Vector(u8),            // 0x00..0x38 for rst
+    Dummy(u8),             // dummy variant for stop N
 }
 
-impl RustEmitter for Operand {
-    fn to_rust(&self) -> String {
-        match self {
-            Operand::R8(reg8) => reg8.to_rust(),
-            Operand::R16(reg16) => reg16.to_rust(),
-            Operand::Imm8 => "Imem8".to_string(),
-            Operand::Imm16 => "Imem16".to_string(),
-            Operand::Cond(condition) => condition.to_rust(),
-            Operand::Mem(operand) => format!("Mem({})", operand.to_rust()),
-            Operand::HighMem(operand) => format!("DMem({})", operand.to_rust()),
-            Operand::Bit(bit) => format!("{}", bit),
-            Operand::Vector(dst) => format!("0x{:02X}", dst),
+impl Operand {
+    pub fn from_bit(value: &str) -> Result<Self, String> {
+        let bit: u8 = match value.parse() {
+            Ok(val) => val,
+            Err(e) => return Err(format!("failed to parse bit {}: {}", value, e)),
+        };
+        match bit {
+            0..=7 => Ok(Self::Bit(bit)),
+            _ => Err(format!("invalid bit {}", value)),
+        }
+    }
+
+    // The yaml spells reset vectors in hex ("0x00".."0x38"), but accept plain
+    // decimal too so the two notations can't silently diverge.
+    pub fn from_vector(value: &str) -> Result<Self, ParseIntError> {
+        match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+            Some(hex) => Ok(Self::Vector(u8::from_str_radix(hex, 16)?)),
+            None => Ok(Self::Vector(value.parse()?)),
         }
     }
 }
 
-impl MnemonicEmitter for Operand {
-    fn to_mnemonic(&self) -> String {
-        todo!()
+impl TryFrom<&str> for Operand {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if let Ok(reg) = Reg8::try_from(value) {
+            return Ok(Operand::R8(reg));
+        }
+        if let Ok(reg) = Reg16::try_from(value) {
+            return Ok(Operand::R16(reg));
+        }
+        if let Ok(cond) = Condition::try_from(value) {
+            return Ok(Operand::Cond(cond));
+        }
+        if let Some(inner) = value.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
+            return match inner.strip_prefix("0xff00+") {
+                Some(hi) => Ok(Operand::HighMem(Box::new(Operand::try_from(hi)?))),
+                None => Ok(Operand::Mem(Box::new(Operand::try_from(inner)?))),
+            };
+        }
+        match value {
+            "d8" | "a8" => Ok(Operand::Imm8),
+            "r8" => Ok(Operand::Rel8),
+            "d16" | "a16" => Ok(Operand::Imm16),
+            _ => Err(()),
+        }
     }
 }
 

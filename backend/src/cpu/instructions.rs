@@ -3,7 +3,7 @@ use std::io::stdin;
 use std::ops::{Shl, Shr};
 use std::ptr::null;
 
-use super::cpu::{self, Cpu, DMem, Dst, Imem16, Imem8, Mem, Src};
+use super::cpu::{self, Cpu, DMem, Dst, Imm16, Imm8, Mem, Src};
 use super::operations::*;
 use super::registers::{Reg16, Reg8};
 
@@ -88,7 +88,7 @@ impl Instruction {
             0x01 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD BC,NN",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg16::BC, Imem16),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg16::BC, Imm16),
             }),
             0x02 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -113,7 +113,7 @@ impl Instruction {
             0x06 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD B,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::B, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::B, Imm8),
             }),
             0x07 => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -123,7 +123,7 @@ impl Instruction {
             0x08 => Some(&Instruction {
                 cycles: Cycles::Unconditional(20),
                 mnemonic: "LD NN,SP",
-                execute: |cpu: &mut Cpu| ld(cpu, Mem(Imem16), Reg16::SP),
+                execute: |cpu: &mut Cpu| ld(cpu, Mem(Imm16), Reg16::SP),
             }),
             0x09 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -153,7 +153,7 @@ impl Instruction {
             0x0E => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD C,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::C, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::C, Imm8),
             }),
             0x0F => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -171,7 +171,7 @@ impl Instruction {
             0x11 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD DE,NN",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg16::DE, Imem16),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg16::DE, Imm16),
             }),
             0x12 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -196,7 +196,7 @@ impl Instruction {
             0x16 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD D,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::D, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::D, Imm8),
             }),
             0x17 => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -206,7 +206,7 @@ impl Instruction {
             0x18 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "JR N",
-                execute: |cpu: &mut Cpu| jr(cpu, Condition::Unconditional, Imem8),
+                execute: |cpu: &mut Cpu| jr(cpu, Condition::Unconditional, Imm8),
             }),
             0x19 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -236,7 +236,7 @@ impl Instruction {
             0x1E => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD E,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::E, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::E, Imm8),
             }),
             0x1F => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -249,12 +249,12 @@ impl Instruction {
                     taken: 12,
                 }),
                 mnemonic: "JR NZ,N",
-                execute: |cpu: &mut Cpu| jr(cpu, Condition::NotZero, Imem8),
+                execute: |cpu: &mut Cpu| jr(cpu, Condition::NotZero, Imm8),
             }),
             0x21 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD HL,NN",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg16::HL, Imem16),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg16::HL, Imm16),
             }),
             0x22 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -279,7 +279,7 @@ impl Instruction {
             0x26 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD H,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::H, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::H, Imm8),
             }),
             0x27 => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -292,7 +292,7 @@ impl Instruction {
                     taken: 12,
                 }),
                 mnemonic: "JR Z,N",
-                execute: |cpu: &mut Cpu| jr(cpu, Condition::Zero, Imem8),
+                execute: |cpu: &mut Cpu| jr(cpu, Condition::Zero, Imm8),
             }),
             0x29 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -322,7 +322,7 @@ impl Instruction {
             0x2E => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD L,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::L, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::L, Imm8),
             }),
             0x2F => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -335,12 +335,12 @@ impl Instruction {
                     taken: 12,
                 }),
                 mnemonic: "JR NC,N",
-                execute: |cpu: &mut Cpu| jr(cpu, Condition::NotCarry, Imem8),
+                execute: |cpu: &mut Cpu| jr(cpu, Condition::NotCarry, Imm8),
             }),
             0x31 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD SP,NN",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg16::SP, Imem16),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg16::SP, Imm16),
             }),
             0x32 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -365,7 +365,7 @@ impl Instruction {
             0x36 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD (HL),N",
-                execute: |cpu: &mut Cpu| ld(cpu, Mem(Reg16::HL), Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Mem(Reg16::HL), Imm8),
             }),
             0x37 => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -378,7 +378,7 @@ impl Instruction {
                     taken: 12,
                 }),
                 mnemonic: "JR CF,N",
-                execute: |cpu: &mut Cpu| jr(cpu, Condition::Carry, Imem8),
+                execute: |cpu: &mut Cpu| jr(cpu, Condition::Carry, Imm8),
             }),
             0x39 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
@@ -408,7 +408,7 @@ impl Instruction {
             0x3E => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "LD A,N",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, Imm8),
             }),
             0x3F => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -1074,12 +1074,12 @@ impl Instruction {
                     taken: 16,
                 }),
                 mnemonic: "JP NZ,NN",
-                execute: |cpu: &mut Cpu| jp(cpu, Condition::NotZero, Imem16),
+                execute: |cpu: &mut Cpu| jp(cpu, Condition::NotZero, Imm16),
             }),
             0xC3 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
                 mnemonic: "JP NN",
-                execute: |cpu: &mut Cpu| jp(cpu, Condition::Unconditional, Imem16),
+                execute: |cpu: &mut Cpu| jp(cpu, Condition::Unconditional, Imm16),
             }),
             0xC4 => Some(&Instruction {
                 cycles: Cycles::Conditional(ConditionCycles {
@@ -1087,7 +1087,7 @@ impl Instruction {
                     taken: 24,
                 }),
                 mnemonic: "CALL NZ,NN",
-                execute: |cpu: &mut Cpu| call(cpu, Condition::NotZero, Imem16),
+                execute: |cpu: &mut Cpu| call(cpu, Condition::NotZero, Imm16),
             }),
             0xC5 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1097,7 +1097,7 @@ impl Instruction {
             0xC6 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "ADD A,N",
-                execute: |cpu: &mut Cpu| add(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| add(cpu, Reg8::A, Imm8),
             }),
             0xC7 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1123,7 +1123,7 @@ impl Instruction {
                     taken: 16,
                 }),
                 mnemonic: "JP Z,NN",
-                execute: |cpu: &mut Cpu| jp(cpu, Condition::Zero, Imem16),
+                execute: |cpu: &mut Cpu| jp(cpu, Condition::Zero, Imm16),
             }),
             0xCC => Some(&Instruction {
                 cycles: Cycles::Conditional(ConditionCycles {
@@ -1131,17 +1131,17 @@ impl Instruction {
                     taken: 24,
                 }),
                 mnemonic: "CALL Z,NN",
-                execute: |cpu: &mut Cpu| call(cpu, Condition::Zero, Imem16),
+                execute: |cpu: &mut Cpu| call(cpu, Condition::Zero, Imm16),
             }),
             0xCD => Some(&Instruction {
                 cycles: Cycles::Unconditional(24),
                 mnemonic: "CALL NN",
-                execute: |cpu: &mut Cpu| call(cpu, Condition::Unconditional, Imem16),
+                execute: |cpu: &mut Cpu| call(cpu, Condition::Unconditional, Imm16),
             }),
             0xCE => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "ADC A,N",
-                execute: |cpu: &mut Cpu| adc(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| adc(cpu, Reg8::A, Imm8),
             }),
             0xCF => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1167,7 +1167,7 @@ impl Instruction {
                     taken: 16,
                 }),
                 mnemonic: "JP NC,NN",
-                execute: |cpu: &mut Cpu| jp(cpu, Condition::NotCarry, Imem16),
+                execute: |cpu: &mut Cpu| jp(cpu, Condition::NotCarry, Imm16),
             }),
             0xD4 => Some(&Instruction {
                 cycles: Cycles::Conditional(ConditionCycles {
@@ -1175,7 +1175,7 @@ impl Instruction {
                     taken: 24,
                 }),
                 mnemonic: "CALL NC,NN",
-                execute: |cpu: &mut Cpu| call(cpu, Condition::NotCarry, Imem16),
+                execute: |cpu: &mut Cpu| call(cpu, Condition::NotCarry, Imm16),
             }),
             0xD5 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1185,7 +1185,7 @@ impl Instruction {
             0xD6 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "SUB N",
-                execute: |cpu: &mut Cpu| sub(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| sub(cpu, Reg8::A, Imm8),
             }),
             0xD7 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1211,7 +1211,7 @@ impl Instruction {
                     taken: 16,
                 }),
                 mnemonic: "JP CF,NN",
-                execute: |cpu: &mut Cpu| jp(cpu, Condition::Carry, Imem16),
+                execute: |cpu: &mut Cpu| jp(cpu, Condition::Carry, Imm16),
             }),
             0xDC => Some(&Instruction {
                 cycles: Cycles::Conditional(ConditionCycles {
@@ -1219,12 +1219,12 @@ impl Instruction {
                     taken: 24,
                 }),
                 mnemonic: "CALL CF,NN",
-                execute: |cpu: &mut Cpu| call(cpu, Condition::Carry, Imem16),
+                execute: |cpu: &mut Cpu| call(cpu, Condition::Carry, Imm16),
             }),
             0xDE => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "SBC A,N",
-                execute: |cpu: &mut Cpu| sbc(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| sbc(cpu, Reg8::A, Imm8),
             }),
             0xDF => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1234,7 +1234,7 @@ impl Instruction {
             0xE0 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD (0XFF00+A8),A",
-                execute: |cpu: &mut Cpu| ld(cpu, DMem(Imem8), Reg8::A),
+                execute: |cpu: &mut Cpu| ld(cpu, DMem(Imm8), Reg8::A),
             }),
             0xE1 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
@@ -1254,7 +1254,7 @@ impl Instruction {
             0xE6 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "AND N",
-                execute: |cpu: &mut Cpu| and(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| and(cpu, Reg8::A, Imm8),
             }),
             0xE7 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1279,12 +1279,12 @@ impl Instruction {
             0xEA => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
                 mnemonic: "LD (NN),A",
-                execute: |cpu: &mut Cpu| ld(cpu, Mem(Imem16), Reg8::A),
+                execute: |cpu: &mut Cpu| ld(cpu, Mem(Imm16), Reg8::A),
             }),
             0xEE => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "XOR N",
-                execute: |cpu: &mut Cpu| xor(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| xor(cpu, Reg8::A, Imm8),
             }),
             0xEF => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1294,7 +1294,7 @@ impl Instruction {
             0xF0 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
                 mnemonic: "LD A,(0XFF00+A8)",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, DMem(Imem8)),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, DMem(Imm8)),
             }),
             0xF1 => Some(&Instruction {
                 cycles: Cycles::Unconditional(12),
@@ -1319,7 +1319,7 @@ impl Instruction {
             0xF6 => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "OR N",
-                execute: |cpu: &mut Cpu| or(cpu, Reg8::A, Imem8),
+                execute: |cpu: &mut Cpu| or(cpu, Reg8::A, Imm8),
             }),
             0xF7 => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
@@ -1339,7 +1339,7 @@ impl Instruction {
             0xFA => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),
                 mnemonic: "LD A,(NN)",
-                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, Mem(Imem16)),
+                execute: |cpu: &mut Cpu| ld(cpu, Reg8::A, Mem(Imm16)),
             }),
             0xFB => Some(&Instruction {
                 cycles: Cycles::Unconditional(4),
@@ -1349,7 +1349,7 @@ impl Instruction {
             0xFE => Some(&Instruction {
                 cycles: Cycles::Unconditional(8),
                 mnemonic: "CP N",
-                execute: |cpu: &mut Cpu| cp(cpu, Imem8),
+                execute: |cpu: &mut Cpu| cp(cpu, Imm8),
             }),
             0xFF => Some(&Instruction {
                 cycles: Cycles::Unconditional(16),

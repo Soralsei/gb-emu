@@ -18,8 +18,6 @@ fn main() {
     for byte in rom[0x100..=0x14F].iter() {
         print!("0x{:02X} ", byte);
     }
-    rom[0x147] = 0;
-    print!("\n");
     let mut sys = System::new(boot_rom, rom);
     loop {
         sys.step();
