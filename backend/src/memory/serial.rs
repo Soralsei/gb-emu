@@ -1,5 +1,5 @@
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
-use crate::{cpu::interrupt::InterruptRequest, is_bit_set};
+use crate::{clock::Clocked, cpu::interrupt::InterruptRequest, is_bit_set};
 
 const CYCLES_TO_SEND: u32 = 512 * 8; // 8192Hz clock => 512 cpu cycles * 8 bits
 const CLOCK_SELECT: u8 = 0;
@@ -28,30 +28,6 @@ impl Serial {
             clock: 0,
             log: String::with_capacity(150),
             recv_byte: 0,
-        }
-    }
-
-    pub fn step(&mut self, elapsed_cycles: u16) {
-        if !self.transfer_enable {
-            return;
-        }
-
-        // Master
-        if self.clock_select {
-            self.clock += elapsed_cycles as u32;
-            // Transfer done
-            if self.clock >= CYCLES_TO_SEND {
-                #[cfg(feature = "debug")]
-                println!("Serial transfer done");
-                self.send_byte = self.recv_byte;
-                self.transfer_enable = false;
-                self.interrupt_request.serial(true);
-                self.clock = 0;
-            }
-        }
-        // Slave
-        else {
-            todo!("Implement serial transfer for slave");
         }
     }
 
@@ -96,5 +72,29 @@ impl MemoryHandler for Serial {
             _ => unreachable!("Invalid serial write : 0x{:04X}", address),
         }
         MemoryWrite::Block
+    }
+}
+
+impl Clocked for Serial {
+    fn step(&mut self, elapsed_cycles: u16) {
+        if !self.transfer_enable {
+            return;
+        }
+
+        // Master
+        if self.clock_select {
+            self.clock += elapsed_cycles as u32;
+            // Transfer done
+            if self.clock >= CYCLES_TO_SEND {
+                self.send_byte = self.recv_byte;
+                self.transfer_enable = false;
+                self.interrupt_request.serial(true);
+                self.clock = 0;
+            }
+        }
+        // Slave
+        else {
+            todo!("Implement serial transfer for slave");
+        }
     }
 }

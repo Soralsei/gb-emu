@@ -1,6 +1,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
+use crate::clock::Clock;
 use crate::{SCREEN_H, SCREEN_W};
 
 use super::memory::mbc::Mbc;
@@ -71,19 +72,23 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
 pub struct System {
     cpu: Cpu,
     interrupt_controller: Device<InterruptController>,
-    timer: Device<Timer>,
-    serial: Device<Serial>,
+    // timer: Device<Timer>,
+    // serial: Device<Serial>,
     current_frame: Box<[u8; SCREEN_W * SCREEN_H]>,
 }
 
 impl System {
     pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>) -> Self {
+        let clock = Clock::new();
         let interrupt_controller = Device::new(InterruptController::new());
         let serial = Device::new(Serial::new(interrupt_controller.borrow().request()));
         let timer = Device::new(Timer::new(interrupt_controller.borrow().request()));
 
-        let mut mmu = Mmu::new();
+        let mut mmu = Mmu::new(clock.clone());
         let mbc = Device::new(Mbc::new(boot_rom, rom));
+
+        clock.attach(timer.0.clone());
+        clock.attach(serial.0.clone());
 
         #[cfg(feature = "blaarg")]
         {
@@ -102,25 +107,19 @@ impl System {
         mmu.add_handler((0xff0f, 0xff0f), interrupt_controller.handler());
         mmu.add_handler((0xffff, 0xffff), interrupt_controller.handler());
 
-        let cpu = Cpu::new(mmu);
+        let cpu = Cpu::new(mmu, clock.clone());
         Self {
             cpu,
             interrupt_controller,
-            timer,
-            serial,
             current_frame: Box::new([0; SCREEN_W * SCREEN_H]),
         }
     }
 
-    pub fn step(&mut self) -> u16 {
-        let mut elapsed = self.cpu.execute_instruction() as u16;
+    pub fn step(&mut self) -> usize {
+        let mut elapsed = self.cpu.execute_instruction();
         elapsed += self
             .cpu
-            .handle_interrupts(self.interrupt_controller.borrow_mut()) as u16;
-        self.timer.borrow_mut().step(elapsed);
-        self.serial.borrow_mut().step(elapsed);
-        // self.ppu.borrow_mut().step(elapsed);
-
+            .handle_interrupts(self.interrupt_controller.borrow_mut());
         elapsed
     }
 

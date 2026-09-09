@@ -1,5 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+use crate::clock::{Clock, M_CYCLE};
+
 pub enum MemoryRead {
     Replace(u8),
     Pass,
@@ -19,15 +21,17 @@ pub trait MemoryHandler {
 #[allow(unused)]
 pub struct Mmu {
     pub handlers: BTreeMap<u16, Vec<Rc<RefCell<dyn MemoryHandler>>>>,
+    clock: Rc<Clock>,
     memory: [u8; 0xffff],
     pub interrupts_enable: u8,
     pub interrupts_flags: u8,
 }
 
 impl Mmu {
-    pub fn new() -> Mmu {
+    pub fn new(clock: Rc<Clock>) -> Mmu {
         Mmu {
             handlers: BTreeMap::new(),
+            clock,
             memory: [0; 0xffff],
             interrupts_enable: 0,
             interrupts_flags: 0,
@@ -52,7 +56,15 @@ impl Mmu {
         }
     }
 
+    /// Bus read, as performed by the CPU: costs a machine cycle.
     pub fn read(&self, addr: u16) -> u8 {
+        self.clock.tick(M_CYCLE);
+        self.peek(addr)
+    }
+
+    /// Observe memory without advancing the clock. For handlers and debug
+    /// tooling, which are not the CPU driving the bus.
+    pub fn peek(&self, addr: u16) -> u8 {
         match self.handlers.get(&addr) {
             Some(handlers) => {
                 for handler in handlers {
@@ -76,7 +88,9 @@ impl Mmu {
         }
     }
 
+    /// Bus write, as performed by the CPU: costs a machine cycle.
     pub fn write(&mut self, addr: u16, value: u8) {
+        self.clock.tick(M_CYCLE);
         match self.handlers.get(&addr) {
             Some(handlers) => {
                 for handler in handlers {

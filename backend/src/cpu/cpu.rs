@@ -1,8 +1,10 @@
 use std::cell::RefMut;
+use std::rc::Rc;
 
 use super::instructions::{Instruction, Opcode, Timing, NOP};
 use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
+use crate::clock::{Clock, M_CYCLE};
 use crate::cpu::instructions::Cycles;
 use crate::memory::mmu::Mmu;
 use crate::util::bit_operations::*;
@@ -89,7 +91,6 @@ impl Src<u8> for Mem<Imm16> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let Mem(imm) = self;
         let addr = imm.read(cpu);
-        // println!("Fetching value from address 0x{:04X}", addr);
         cpu.mmu.read(addr)
     }
 }
@@ -99,9 +100,6 @@ impl Dst<u8> for Mem<Reg16> {
     fn write(self, cpu: &mut Cpu, val: u8) {
         let Mem(reg) = self;
         let addr = reg.read(cpu);
-        // if let Reg16::HL = reg {
-        //     eprintln!("Writing {:02X} to 0x{:04X}", val, addr);
-        // }
         cpu.mmu.write(addr, val);
     }
 }
@@ -123,10 +121,6 @@ impl Dst<u8> for Mem<Imm16> {
         let Mem(loc) = self;
 
         let addr = loc.read(cpu);
-        // if addr == 0xDEF8 || addr == 0xDEF9{
-        //     println!("Writing value 0x{:02X} to 0x{:04X}, {}", value, addr, cpu.registers);
-        //     stdin().read_line(&mut String::with_capacity(1)).unwrap();
-        // }
         cpu.mmu.write(addr, value);
     }
 }
@@ -173,21 +167,32 @@ pub struct Cpu {
     ime: bool,
     pub halted: bool,
     mmu: Mmu,
+    clock: Rc<Clock>,
 }
 
 impl Cpu {
-    pub fn new(mmu: Mmu) -> Cpu {
+    pub fn new(mmu: Mmu, clock: Rc<Clock>) -> Cpu {
         Cpu {
             registers: Registers::new(),
             ime: true,
             halted: false,
             mmu,
+            clock,
         }
+    }
+
+    /// Tick the cycles this unit of work needs on top of the ones its bus
+    /// accesses already ticked, then start counting the next one.
+    fn spend(&mut self, total_cycles: usize) {
+        let remaining = (total_cycles as u32).saturating_sub(self.clock.elapsed());
+        self.clock.tick(remaining as u16);
+        self.clock.reset();
     }
 
     pub fn execute_instruction(&mut self) -> usize {
         if self.halted {
-            return 4;
+            self.spend(M_CYCLE as usize);
+            return M_CYCLE as usize;
         }
 
         let opcode = self.fetch_u8();
@@ -207,19 +212,21 @@ impl Cpu {
         }
         let timing = (instruction.execute)(self);
 
-        match &instruction.cycles {
+        let cycles = match &instruction.cycles {
             Cycles::Unconditional(cycles) => *cycles,
             Cycles::Conditional(condition_cycles) => match timing {
                 Timing::Normal => condition_cycles.not_taken,
                 Timing::Conditional => condition_cycles.taken,
             },
-        }
+        };
+        self.spend(cycles);
+        cycles
     }
 
     pub fn handle_interrupts(
         &mut self,
         interrupt_controller: RefMut<'_, InterruptController>,
-    ) -> u8 {
+    ) -> usize {
         // TODO: implement halt bug
         if self.halted {
             if let Some(_) = interrupt_controller.peek() {
@@ -276,10 +283,8 @@ impl Cpu {
     #[inline(always)]
     pub fn push_u16(&mut self, value: u16) {
         let (msb, lsb) = word_to_bytes(value);
-        // println!("pushing bytes {:02X} and {:02X} to stack pointer at {:04X}", lsb, msb, self.registers.sp);
         self.push_u8(msb);
         self.push_u8(lsb);
-        // println!("{}", self.registers);
     }
 
     #[inline(always)]
@@ -291,10 +296,8 @@ impl Cpu {
 
     #[inline(always)]
     pub fn pop_u16(&mut self) -> u16 {
-        // println!("SP before : 0x{:04X}", self.registers.sp);
         let lsb = self.pop_u8();
         let msb = self.pop_u8();
-        // println!("popped bytes {:02X} and {:02X} from stack", lsb, msb);
         bytes_to_word(msb, lsb)
     }
 

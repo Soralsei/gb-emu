@@ -176,9 +176,10 @@ impl MemoryBank for Mbc1 {
                 };
 
                 let mut bank_number = bank2_number | corrected_bank1;
-                // eprintln!("Reading from resolved bank number 0x{:02X}", bank_number);
-
-                let bank_addr: usize = bank_number as usize * ROM_BANK_SIZE | address as usize;
+                // Get the address inside the selected bank
+                // strictly equivalent to bank_number * ROM_BANK_SIZE + (address - 0x3FFF)
+                let bank_addr: usize =
+                    bank_number as usize * ROM_BANK_SIZE | (address & 0x3FFF) as usize;
 
                 MemoryRead::Replace(self.rom[bank_addr])
             }
@@ -195,7 +196,9 @@ impl MemoryBank for Mbc1 {
                 } else {
                     0
                 };
-                let ram_addr = bank as usize * RAM_BANK_SIZE | address as usize;
+                // Same here, get address inside ram bank
+                // equivalent to bank_number * RAM_BANK_SIZE + (address - 0xA000)
+                let ram_addr = bank as usize * RAM_BANK_SIZE | (address & 0xA000) as usize;
                 MemoryRead::Replace(self.ram[ram_addr])
             }
             _ => unreachable!("Invalid memory write at address 0x{:04X}", address),

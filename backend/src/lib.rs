@@ -1,3 +1,4 @@
+mod clock;
 mod cpu;
 mod debug;
 mod graphics;

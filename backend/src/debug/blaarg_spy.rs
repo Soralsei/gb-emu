@@ -8,7 +8,7 @@ impl MemoryHandler for BlaargSpy {
 
     fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite {
         if address == 0xA000 {
-            let previous = mmu.read(address);
+            let previous = mmu.peek(address);
             if previous == 0x80 {
                 let mut result = String::with_capacity(100);
                 let mut value = value;
@@ -16,7 +16,7 @@ impl MemoryHandler for BlaargSpy {
                 while value != 0 {
                     result.push(value as char);
                     addr += 1;
-                    value = mmu.read(addr);
+                    value = mmu.peek(addr);
                 }
                 println!("Test result: {}", result);
             }

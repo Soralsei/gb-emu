@@ -1,13 +1,12 @@
 use super::interrupt::InterruptRequest;
-use crate::{is_bit_set, memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite}};
+use crate::{
+    clock::Clocked,
+    is_bit_set,
+    memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
+};
 const TAC_ENABLE: u8 = 2;
 const DIV_CLOCKS: u16 = 256;
-const CLOCKS: [u16; 4] = [
-    1024,
-    16,
-    64,
-    256,
-];
+const CLOCKS: [u16; 4] = [1024, 16, 64, 256];
 
 pub struct Timer {
     interrupt_request: InterruptRequest,
@@ -33,32 +32,6 @@ impl Timer {
             overflowed: false,
         }
     }
-    pub fn step(&mut self, elapsed_cycles: u16) {
-        // Handle divider timer
-        self.div_clocks += elapsed_cycles;
-        if self.div_clocks >= DIV_CLOCKS {
-            self.div = self.div.wrapping_add(1);
-            self.div_clocks -= DIV_CLOCKS;
-        }
-        if self.overflowed {
-            self.tima = self.tma;
-            self.overflowed = false;
-            self.interrupt_request.timer(true);
-        }
-        // Check if TIMA is enabled
-        if !is_bit_set!(self.tac, TAC_ENABLE) {
-            return;
-        }
-
-        self.tima_clocks += elapsed_cycles as u32;
-        let frequency = CLOCKS[(self.tac & 0b011) as usize] as u32;
-        while self.tima_clocks >= frequency{
-            let (tima, overflowed) = self.tima.overflowing_add(1);
-            self.tima = tima;
-            self.overflowed |= overflowed;
-            self.tima_clocks -= frequency;
-        }
-    }
 }
 
 impl MemoryHandler for Timer {
@@ -82,8 +55,11 @@ impl MemoryHandler for Timer {
             0xFF04 => {
                 self.div = 0;
                 return MemoryWrite::Replace(0);
-            },
-            0xFF05 => self.tima = value,
+            }
+            0xFF05 => {
+                self.tima = value;
+                self.overflowed = false;
+            }
             0xFF06 => self.tma = value,
             0xFF07 => {
                 let old = self.tac;
@@ -91,9 +67,38 @@ impl MemoryHandler for Timer {
                 if is_bit_set!(self.tac, TAC_ENABLE) && is_bit_set!(old, TAC_ENABLE) {
                     self.tima_clocks = 0;
                 }
-            },
+            }
             _ => {}
         }
         MemoryWrite::Pass
+    }
+}
+
+impl Clocked for Timer {
+    fn step(&mut self, elapsed_cycles: u16) {
+        // Handle divider timer
+        self.div_clocks += elapsed_cycles;
+        if self.div_clocks >= DIV_CLOCKS {
+            self.div = self.div.wrapping_add(1);
+            self.div_clocks -= DIV_CLOCKS;
+        }
+        if self.overflowed {
+            self.tima = self.tma;
+            self.overflowed = false;
+            self.interrupt_request.timer(true);
+        }
+        // Check if TIMA is enabled
+        if !is_bit_set!(self.tac, TAC_ENABLE) {
+            return;
+        }
+
+        self.tima_clocks += elapsed_cycles as u32;
+        let frequency = CLOCKS[(self.tac & 0b011) as usize] as u32;
+        while self.tima_clocks >= frequency {
+            let (tima, overflowed) = self.tima.overflowing_add(1);
+            self.tima = tima;
+            self.overflowed |= overflowed;
+            self.tima_clocks -= frequency;
+        }
     }
 }
