@@ -300,6 +300,8 @@ impl Cpu {
 
     #[inline(always)]
     pub fn stop(&mut self) {
+        let _ = self.fetch_u8(); // stop discards the following byte in the simple case
+                                 // TODO: implement stop quirks
         eprintln!("CPU stop not yet implemented");
     }
 }

@@ -285,7 +285,6 @@ pub fn ccf(cpu: &mut Cpu) -> Timing {
 
 pub fn halt(cpu: &mut Cpu) -> Timing {
     cpu.halted = true;
-    // println!("Should implement CPU halting");
     Timing::Normal
 }
 
@@ -390,16 +389,12 @@ pub fn cp<S: Src<u8>>(cpu: &mut Cpu, src: S) -> Timing {
     let b = src.read(cpu);
     let a = cpu.registers.a;
 
-    // println!("Value B {:02X}", b);
-    // println!("Before {}", cpu.registers);
-
     let (result, carry) = a.overflowing_sub(b);
 
     cpu.registers.f.zero = result == 0;
     cpu.registers.f.subtract = true;
     cpu.registers.f.half_carry = (result & 0xf) > (a & 0xf);
     cpu.registers.f.carry = carry;
-    // panic!("After {}", cpu.registers);
 
     Timing::Normal
 }
@@ -407,8 +402,6 @@ pub fn cp<S: Src<u8>>(cpu: &mut Cpu, src: S) -> Timing {
 pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
     if cond.eval(cpu) {
         let pc = cpu.pop_u16();
-        #[cfg(feature = "debug")]
-        println!("Returning to address 0x{:04X}", pc);
         cpu.registers.pc = pc;
         return Timing::Conditional;
     }
@@ -417,7 +410,6 @@ pub fn ret(cpu: &mut Cpu, cond: Condition) -> Timing {
 
 pub fn pop<D: Dst<u16>>(cpu: &mut Cpu, dest: D) -> Timing {
     let value = cpu.pop_u16();
-    // println!("Writing {:04X}", value);
     dest.write(cpu, value);
 
     Timing::Normal
@@ -425,7 +417,6 @@ pub fn pop<D: Dst<u16>>(cpu: &mut Cpu, dest: D) -> Timing {
 
 pub fn push<S: Src<u16>>(cpu: &mut Cpu, src: S) -> Timing {
     let value = src.read(cpu);
-    // println!("Pushing address 0x{:04X} to stack", value);
     cpu.push_u16(value);
     Timing::Normal
 }
@@ -443,10 +434,6 @@ pub fn call<T: Src<u16>>(cpu: &mut Cpu, cond: Condition, target: T) -> Timing {
     let addr = target.read(cpu);
     if cond.eval(cpu) {
         push(cpu, Reg16::PC);
-        #[cfg(feature = "debug")]
-        {
-            println!("\nCalling function at 0x{:04X}", addr);
-        }
         cpu.registers.pc = addr;
         return Timing::Conditional;
     }
@@ -521,7 +508,6 @@ pub fn sra<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn sla<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    // eprintln!("Before {}, value {:02X}", cpu.registers, value);
     let result = value << 1;
     loc.write(cpu, result);
 

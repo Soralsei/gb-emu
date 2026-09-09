@@ -1,20 +1,24 @@
 #![allow(unused)]
-use crate::is_bit_set;
+use crate::{is_bit_set, util::bit_operations::addressing_number_of_bits};
 
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite};
 use core::fmt;
 
 const CGB: u8 = 7;
 const CGB_ONLY: u8 = 6;
+const ROM_SIZE: usize = 32 * 1024;
+const ROM_BANK_SIZE: usize = 16 * 1024;
+const RAM_BANK_SIZE: usize = 8 * 1024;
+const MAX_ROM_SIZE_NORMAL: usize = 512 * 1024;
 
 trait MemoryBank {
     fn read(&self, address: u16) -> MemoryRead;
-    fn write(&self, address: u16, value: u8) -> MemoryWrite;
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite;
 }
 
 enum MbcType {
     MbcNone(MbcNone),
-    Mbc1(MbcNone),
+    Mbc1(Mbc1),
     Mbc2(MbcNone),
     Mbc3(MbcNone),
     Mbc5(MbcNone),
@@ -23,9 +27,10 @@ enum MbcType {
 }
 
 impl MbcType {
-    pub fn new(code: u8, rom: Vec<u8>) -> MbcType {
+    pub fn new(code: u8, rom: Vec<u8>, rom_size: usize, ram_size: usize) -> MbcType {
         match code {
-            0x00 => MbcType::MbcNone(MbcNone::new(rom)),
+            0x00 => MbcType::MbcNone(MbcNone { rom }),
+            0x01 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
             _ => unimplemented!("Mbc type not yet implemented"),
         }
     }
@@ -35,7 +40,7 @@ impl MemoryBank for MbcType {
     fn read(&self, address: u16) -> MemoryRead {
         match self {
             MbcType::MbcNone(mbc) => mbc.read(address),
-            MbcType::Mbc1(_) => todo!(),
+            MbcType::Mbc1(mbc) => mbc.read(address),
             MbcType::Mbc2(_) => todo!(),
             MbcType::Mbc3(_) => todo!(),
             MbcType::Mbc5(_) => todo!(),
@@ -44,10 +49,10 @@ impl MemoryBank for MbcType {
         }
     }
 
-    fn write(&self, address: u16, value: u8) -> MemoryWrite {
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match self {
             MbcType::MbcNone(mbc) => mbc.write(address, value),
-            MbcType::Mbc1(_) => todo!(),
+            MbcType::Mbc1(mbc) => mbc.write(address, value),
             MbcType::Mbc2(_) => todo!(),
             MbcType::Mbc3(_) => todo!(),
             MbcType::Mbc5(_) => todo!(),
@@ -76,12 +81,6 @@ struct MbcNone {
     rom: Vec<u8>,
 }
 
-impl MbcNone {
-    pub fn new(rom: Vec<u8>) -> Self {
-        Self { rom }
-    }
-}
-
 impl MemoryBank for MbcNone {
     fn read(&self, address: u16) -> MemoryRead {
         if address <= 0x7FFF {
@@ -90,12 +89,141 @@ impl MemoryBank for MbcNone {
         MemoryRead::Pass
     }
 
-    fn write(&self, address: u16, value: u8) -> MemoryWrite {
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match address {
-            0..=0x7FFF => {
+            0..=0x7FFF => MemoryWrite::Block,
+            0xA000..=0xBFFF => MemoryWrite::Pass,
+            _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
+        }
+    }
+}
+
+struct Mbc1 {
+    rom: Vec<u8>,
+    ram: Vec<u8>,
+    // Registers
+    ram_enable: bool, // written at 0x
+    rom_bank_number: u8,
+    ram_bank_number: u8,
+    advanced_mode: bool,
+}
+
+impl Mbc1 {
+    pub fn new(rom: Vec<u8>, ram_size: usize) -> Self {
+        Self {
+            rom,
+            ram: vec![0u8; ram_size],
+            ram_enable: false,
+            rom_bank_number: 0x00,
+            ram_bank_number: 0x00,
+            advanced_mode: false,
+        }
+    }
+
+    fn maybe_one_bank(bank_number: u8) -> u8 {
+        if bank_number & 0b11111 == 0x00 {
+            0x01
+        } else {
+            bank_number
+        }
+    }
+
+    fn has_ram(&self) -> bool {
+        self.ram.len() > 0
+    }
+
+    fn rom_needs_extended_banking(&self) -> bool {
+        self.rom.len() > MAX_ROM_SIZE_NORMAL
+    }
+
+    fn get_bank_num_mask(&self) -> usize {
+        let num_banks: usize = (self.rom.len() as f32 / ROM_BANK_SIZE as f32).ceil() as usize;
+        let num_bits = addressing_number_of_bits(num_banks);
+        // Should never occur, but just to be safe
+        // avoids overflow
+        let usize_bits = size_of::<usize>() * 8;
+        if (num_bits >= usize_bits) {
+            return !0usize;
+        }
+        (1 << num_bits) - 1
+    }
+}
+
+impl MemoryBank for Mbc1 {
+    fn read(&self, address: u16) -> MemoryRead {
+        match address {
+            0x0000..=0x3FFF => {
+                // Should be 0b0[ram_bank_number & 0b11]00000
+                // ex: ram_bank_number = 0b10 => bank_number = 0b01000000
+                // bank_number can only ever be in the set = {0x00, 0x20, 0x40, 0x60}
+                let bank_number: usize = if self.advanced_mode && self.rom_needs_extended_banking()
+                {
+                    (self.ram_bank_number & 0b11) << 5
+                } else {
+                    0
+                } as usize;
+                // bits 20 and 19 => bank_number, bits 18-14 => 0, bits 13-0 => address <= 0x3FFF
+                let bank_addr: usize = bank_number * ROM_BANK_SIZE | (address as usize);
+                MemoryRead::Replace(self.rom[bank_addr])
+            }
+            0x4000..=0x7FFF => {
+                let bank_mask = self.get_bank_num_mask() as u8;
+                let corrected_bank1 = Mbc1::maybe_one_bank(self.rom_bank_number) & bank_mask;
+                let bank2_number: u8 = if self.rom_needs_extended_banking() {
+                    (self.ram_bank_number & 0b11) << 5
+                } else {
+                    0
+                };
+
+                let mut bank_number = bank2_number | corrected_bank1;
+                // eprintln!("Reading from resolved bank number 0x{:02X}", bank_number);
+
+                let bank_addr: usize = bank_number as usize * ROM_BANK_SIZE | address as usize;
+
+                MemoryRead::Replace(self.rom[bank_addr])
+            }
+            0xA000..=0xBFFF => {
+                // Reads from disabled ram return open-bus values
+                if !self.ram_enable {
+                    return MemoryRead::Replace(0xFF);
+                }
+                if self.rom_needs_extended_banking() {
+                    return MemoryRead::Replace(self.ram[address as usize]);
+                }
+                let bank = if self.advanced_mode {
+                    self.ram_bank_number & 0b11
+                } else {
+                    0
+                };
+                let ram_addr = bank as usize * RAM_BANK_SIZE | address as usize;
+                MemoryRead::Replace(self.ram[ram_addr])
+            }
+            _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
+        }
+    }
+
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
+        match address {
+            0x0000..=0x1FFF => {
+                self.ram_enable = value & 0b1111 == 0xA;
+                MemoryWrite::Block
+            }
+            0x2000..=0x3FFF => {
+                self.rom_bank_number = value & 0b11111;
+                eprintln!(
+                    "Writing value 0x{:02X} => 0x{:02X} to BANK1 register",
+                    value, self.rom_bank_number
+                );
+                MemoryWrite::Block
+            }
+            0x4000..=0x5FFF => {
+                self.ram_bank_number = value & 0b11;
                 return MemoryWrite::Block;
             }
-            0xA000..=0xBFFF => return MemoryWrite::Pass,
+            0x6000..=0x7FFF => {
+                self.advanced_mode = value & 0b1 != 0;
+                MemoryWrite::Block
+            }
             _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
         }
     }
@@ -106,8 +234,8 @@ struct Cartridge {
     cgb: bool,
     cgb_only: bool,
     mbc: MbcType,
-    rom_size: u8,
-    ram_size: u8,
+    rom_size: usize,
+    ram_size: usize,
 }
 
 fn checksum(rom: &[u8]) {
@@ -118,13 +246,19 @@ impl Cartridge {
     pub fn new(rom: Vec<u8>) -> Self {
         let title = String::from_utf8_lossy(&rom[0x134..=0x142]);
         let mbc_type = rom[0x147];
-        let rom_size = rom[0x148];
-        let ram_size = rom[0x149];
+        let rom_size = ROM_SIZE * (1 << rom[0x148]);
+        let ram_size = match rom[0x149] {
+            0x02 => RAM_BANK_SIZE,
+            0x03 => RAM_BANK_SIZE * 4,
+            0x04 => RAM_BANK_SIZE * 16,
+            0x05 => RAM_BANK_SIZE * 8,
+            _ => 0,
+        };
         Self {
             title: title.to_string(),
             cgb: is_bit_set!(rom[0x143], CGB),
             cgb_only: is_bit_set!(rom[0x143], CGB_ONLY),
-            mbc: MbcType::new(mbc_type, rom),
+            mbc: MbcType::new(mbc_type, rom, rom_size, ram_size),
             rom_size,
             ram_size,
         }
@@ -161,12 +295,7 @@ impl fmt::Display for Cartridge {
             RAM size : {},
             ROM size : {} KiB
         }}",
-            self.title,
-            self.mbc,
-            self.cgb,
-            self.cgb_only,
-            ram_size,
-            32 * (1 << self.rom_size)
+            self.title, self.mbc, self.cgb, self.cgb_only, ram_size, self.rom_size
         )
     }
 }
@@ -218,7 +347,6 @@ impl MemoryHandler for Mbc {
             self.boot_rom_enabled = false;
             return MemoryWrite::Block;
         }
-        let write = self.cart.write(mmu, address, value);
-        write
+        self.cart.write(mmu, address, value)
     }
 }

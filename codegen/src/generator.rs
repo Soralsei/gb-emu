@@ -170,7 +170,7 @@ pub fn run(args: &GenerateArgs) -> Result<(), Box<dyn Error>> {
     context.insert("instructions", &instructions);
     context.insert("prefixed_instructions", &prefixed_instructions);
 
-    let rendered = tera.render("instruction.rs", &context)?;
+    let rendered = tera.render("instruction.rs.tera", &context)?;
     File::create(&args.output)?.write_all(rendered.as_bytes())?;
 
     println!(
