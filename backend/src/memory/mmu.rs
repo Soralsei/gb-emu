@@ -22,7 +22,7 @@ pub trait MemoryHandler {
 pub struct Mmu {
     pub handlers: BTreeMap<u16, Vec<Rc<RefCell<dyn MemoryHandler>>>>,
     clock: Rc<Clock>,
-    memory: [u8; 0xffff],
+    memory: [u8; 0x10000],
     pub interrupts_enable: u8,
     pub interrupts_flags: u8,
 }
@@ -32,7 +32,7 @@ impl Mmu {
         Mmu {
             handlers: BTreeMap::new(),
             clock,
-            memory: [0; 0xffff],
+            memory: [0; 0x10000],
             interrupts_enable: 0,
             interrupts_flags: 0,
         }

@@ -338,7 +338,7 @@ impl Mbc {
 
     #[inline]
     fn in_boot_rom(&self, address: u16) -> bool {
-        address < 0x100 || (self.boot_rom.len() == 0x900 && address >= 200 && address < 0x900)
+        address < 0x100 || (self.boot_rom.len() == 0x900 && address >= 0x200 && address < 0x900)
     }
 }
 
