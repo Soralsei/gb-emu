@@ -1,4 +1,5 @@
-use backend::system::{Button, System};
+use backend::input::Button;
+use backend::system::System;
 use backend::{SCREEN_H, SCREEN_W};
 use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
 
@@ -20,7 +21,7 @@ fn main() {
     let rom = std::fs::read(&args[1]).expect("rom");
     let boot = args.get(2).and_then(|p| std::fs::read(p).ok());
 
-    let mut sys = System::new(boot, rom);
+    let mut sys = System::new(boot, rom, false);
     let mut win = Window::new(
         "gb-emu",
         SCREEN_W,

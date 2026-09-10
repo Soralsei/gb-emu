@@ -8,7 +8,6 @@ use super::cpu::{self, Cpu, DMem, Dst, Imm16, Imm8, Mem, Src};
 use super::operations::*;
 use super::registers::{Reg16, Reg8};
 
-
 pub enum Opcode {
     Unprefixed(u8),
     Prefixed(u8),

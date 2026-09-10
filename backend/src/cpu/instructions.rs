@@ -8,7 +8,6 @@ use super::cpu::{self, Cpu, DMem, Dst, Imm16, Imm8, Mem, Src};
 use super::operations::*;
 use super::registers::{Reg16, Reg8};
 
-
 pub enum Opcode {
     Unprefixed(u8),
     Prefixed(u8),
@@ -39,21 +38,18 @@ impl Condition {
     }
 }
 
-
 #[derive(PartialEq)]
 pub struct ConditionCycles {
     pub not_taken: usize,
     pub taken: usize,
 }
 
-
 #[derive(PartialEq)]
 pub enum Cycles {
     Unconditional(usize),
-    Conditional(ConditionCycles)
+    Conditional(ConditionCycles),
 }
 
-#[derive(PartialEq)]
 pub struct Instruction {
     pub cycles: Cycles,
     pub mnemonic: &'static str,
@@ -171,7 +167,10 @@ impl Instruction {
             0x10 => Instruction {
                 cycles: Cycles::Unconditional(4),
                 mnemonic: "stop 0x00",
-                execute: |cpu: &mut Cpu| { cpu.stop(); Timing::Normal },
+                execute: |cpu: &mut Cpu| {
+                    cpu.stop();
+                    Timing::Normal
+                },
             },
             0x11 => Instruction {
                 cycles: Cycles::Unconditional(12),
@@ -249,7 +248,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| rra(cpu),
             },
             0x20 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 12 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 12,
+                }),
                 mnemonic: "jr nz, r8",
                 execute: |cpu: &mut Cpu| jr(cpu, Condition::NotZero, Imm8),
             },
@@ -289,7 +291,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| daa(cpu),
             },
             0x28 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 12 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 12,
+                }),
                 mnemonic: "jr z, r8",
                 execute: |cpu: &mut Cpu| jr(cpu, Condition::Zero, Imm8),
             },
@@ -329,7 +334,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| cpl(cpu),
             },
             0x30 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 12 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 12,
+                }),
                 mnemonic: "jr nc, r8",
                 execute: |cpu: &mut Cpu| jr(cpu, Condition::NotCarry, Imm8),
             },
@@ -369,7 +377,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| scf(cpu),
             },
             0x38 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 12 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 12,
+                }),
                 mnemonic: "jr c, r8",
                 execute: |cpu: &mut Cpu| jr(cpu, Condition::Carry, Imm8),
             },
@@ -1049,7 +1060,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| cp(cpu, Reg8::A),
             },
             0xC0 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 20 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 20,
+                }),
                 mnemonic: "ret nz",
                 execute: |cpu: &mut Cpu| ret(cpu, Condition::NotZero),
             },
@@ -1059,7 +1073,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| pop(cpu, Reg16::BC),
             },
             0xC2 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 16 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 16,
+                }),
                 mnemonic: "jp nz, d16",
                 execute: |cpu: &mut Cpu| jp(cpu, Condition::NotZero, Imm16),
             },
@@ -1069,7 +1086,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| jp(cpu, Condition::Unconditional, Imm16),
             },
             0xC4 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 24 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 24,
+                }),
                 mnemonic: "call nz, d16",
                 execute: |cpu: &mut Cpu| call(cpu, Condition::NotZero, Imm16),
             },
@@ -1089,7 +1109,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| rst(cpu, 0x00),
             },
             0xC8 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 20 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 20,
+                }),
                 mnemonic: "ret z",
                 execute: |cpu: &mut Cpu| ret(cpu, Condition::Zero),
             },
@@ -1099,12 +1122,18 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| ret(cpu, Condition::Unconditional),
             },
             0xCA => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 16 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 16,
+                }),
                 mnemonic: "jp z, d16",
                 execute: |cpu: &mut Cpu| jp(cpu, Condition::Zero, Imm16),
             },
             0xCC => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 24 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 24,
+                }),
                 mnemonic: "call z, d16",
                 execute: |cpu: &mut Cpu| call(cpu, Condition::Zero, Imm16),
             },
@@ -1124,7 +1153,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| rst(cpu, 0x08),
             },
             0xD0 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 20 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 20,
+                }),
                 mnemonic: "ret nc",
                 execute: |cpu: &mut Cpu| ret(cpu, Condition::NotCarry),
             },
@@ -1134,12 +1166,18 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| pop(cpu, Reg16::DE),
             },
             0xD2 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 16 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 16,
+                }),
                 mnemonic: "jp nc, d16",
                 execute: |cpu: &mut Cpu| jp(cpu, Condition::NotCarry, Imm16),
             },
             0xD4 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 24 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 24,
+                }),
                 mnemonic: "call nc, d16",
                 execute: |cpu: &mut Cpu| call(cpu, Condition::NotCarry, Imm16),
             },
@@ -1159,7 +1197,10 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| rst(cpu, 0x10),
             },
             0xD8 => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 8, taken: 20 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 8,
+                    taken: 20,
+                }),
                 mnemonic: "ret c",
                 execute: |cpu: &mut Cpu| ret(cpu, Condition::Carry),
             },
@@ -1169,12 +1210,18 @@ impl Instruction {
                 execute: |cpu: &mut Cpu| reti(cpu),
             },
             0xDA => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 16 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 16,
+                }),
                 mnemonic: "jp c, d16",
                 execute: |cpu: &mut Cpu| jp(cpu, Condition::Carry, Imm16),
             },
             0xDC => Instruction {
-                cycles: Cycles::Conditional(ConditionCycles { not_taken: 12, taken: 24 }),
+                cycles: Cycles::Conditional(ConditionCycles {
+                    not_taken: 12,
+                    taken: 24,
+                }),
                 mnemonic: "call c, d16",
                 execute: |cpu: &mut Cpu| call(cpu, Condition::Carry, Imm16),
             },

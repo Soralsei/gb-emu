@@ -1,7 +1,7 @@
 use std::cell::RefMut;
 use std::rc::Rc;
 
-use super::instructions::{Instruction, Opcode, Timing, NOP};
+use super::instructions::{Instruction, Opcode, Timing};
 use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
 use crate::clock::{Clock, M_CYCLE};
@@ -168,6 +168,7 @@ pub struct Cpu {
     pub halted: bool,
     mmu: Mmu,
     clock: Rc<Clock>,
+    stopped: bool,
 }
 
 impl Cpu {
@@ -178,19 +179,22 @@ impl Cpu {
             halted: false,
             mmu,
             clock,
+            stopped: false,
         }
     }
 
     /// Tick the cycles this unit of work needs on top of the ones its bus
     /// accesses already ticked, then start counting the next one.
-    fn spend(&mut self, total_cycles: usize) {
-        let remaining = (total_cycles as u32).saturating_sub(self.clock.elapsed());
-        self.clock.tick(remaining as u16);
+    fn spend(&mut self, total_cycles: usize) -> usize {
+        let elapsed = self.clock.elapsed();
+        self.clock
+            .tick((total_cycles as u32).saturating_sub(elapsed) as u16);
         self.clock.reset();
+        elapsed.max(total_cycles as u32) as usize
     }
 
     pub fn execute_instruction(&mut self) -> usize {
-        if self.halted {
+        if self.halted || self.stopped {
             self.spend(M_CYCLE as usize);
             return M_CYCLE as usize;
         }
@@ -219,14 +223,16 @@ impl Cpu {
                 Timing::Conditional => condition_cycles.taken,
             },
         };
-        self.spend(cycles);
-        cycles
+        self.spend(cycles)
     }
 
     pub fn handle_interrupts(
         &mut self,
         interrupt_controller: RefMut<'_, InterruptController>,
     ) -> usize {
+        if self.stopped {
+            return 0;
+        }
         // TODO: implement halt bug
         if self.halted {
             if let Some(_) = interrupt_controller.peek() {
@@ -244,17 +250,18 @@ impl Cpu {
         self.interrupt(value);
         self.halted = false;
 
-        // interrupt handling always consumes exactly 20 cycles
-        20
+        // interrupt handling always consumes exactly 20 cycles.
+        // Share the 20 cycles base with potential bus cycles
+        self.spend(20)
     }
 
     pub fn set_interrupts(&mut self, active: bool) {
         self.ime = active;
     }
 
-    #[allow(unused)]
     fn interrupt(&mut self, value: u8) {
         self.set_interrupts(false);
+        self.clock.tick(M_CYCLE);
         self.push_u16(self.registers.pc);
         self.registers.pc = value as u16;
     }
@@ -282,6 +289,7 @@ impl Cpu {
 
     #[inline(always)]
     pub fn push_u16(&mut self, value: u16) {
+        self.clock.tick(M_CYCLE);
         let (msb, lsb) = word_to_bytes(value);
         self.push_u8(msb);
         self.push_u8(lsb);
@@ -301,10 +309,42 @@ impl Cpu {
         bytes_to_word(msb, lsb)
     }
 
-    #[inline(always)]
     pub fn stop(&mut self) {
-        let _ = self.fetch_u8(); // stop discards the following byte in the simple case
-                                 // TODO: implement stop quirks
-        eprintln!("CPU stop not yet implemented");
+        let pending = self.mmu.peek(0xFFFF) & self.mmu.peek(0xFF0F) & 0x1F;
+        let joyp = self.mmu.peek(0xFF00) & 0x0F;
+
+        if joyp != 0x0F {
+            if pending == 0 {
+                // STOP => 2 bytes
+                let _ = self.fetch_u8();
+                self.halted = true;
+            }
+            return;
+        }
+
+        // if KEY1 & SPEED_SWITCH {
+        //     if pending == 0 {
+        //         let _ = self.fetch_u8();
+        //         self.halted = true;
+        //     }
+        //     if !self.ime {
+        //         // Maybe
+        //         return Err(StopGlitchError);
+        //     }
+        //     return;
+        // }
+
+        // If no pending speed switch and no JOYP currently pressed
+        if pending == 0 {
+            // STOP => 2 bytes
+            let _ = self.fetch_u8();
+        }
+        // For both, enter STOP mode and reset DIV
+        self.stopped = true;
+        self.clock.stop();
+    }
+
+    pub fn resume(&mut self) {
+        self.stopped = false
     }
 }

@@ -31,7 +31,7 @@ impl MbcType {
         match code {
             0x00 => MbcType::MbcNone(MbcNone { rom }),
             0x01 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
-            _ => unimplemented!("Mbc type not yet implemented"),
+            _ => unimplemented!("Mbc type 0x{:02X} not yet implemented", code),
         }
     }
 }
@@ -232,7 +232,7 @@ impl MemoryBank for Mbc1 {
     }
 }
 
-struct Cartridge {
+pub struct Cartridge {
     title: String,
     cgb: bool,
     cgb_only: bool,
@@ -265,6 +265,10 @@ impl Cartridge {
             rom_size,
             ram_size,
         }
+    }
+
+    pub fn is_cgb_only(&self) -> bool {
+        self.cgb_only
     }
 }
 
@@ -326,6 +330,10 @@ impl Mbc {
                 boot_rom_enabled: false,
             },
         }
+    }
+
+    pub fn cartridge(&self) -> &Cartridge {
+        &self.cart
     }
 
     #[inline]

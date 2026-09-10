@@ -7,6 +7,7 @@ pub const M_CYCLE: u16 = 4;
 /// A device that advances with the system clock.
 pub trait Clocked {
     fn step(&mut self, elapsed_cycles: u16);
+    fn stop(&mut self) {}
 }
 
 /// Drives every timed device. The CPU advances it one machine cycle per bus
@@ -15,6 +16,7 @@ pub trait Clocked {
 pub struct Clock {
     devices: RefCell<Vec<Rc<RefCell<dyn Clocked>>>>,
     elapsed: Cell<u32>,
+    stopped: RefCell<bool>,
 }
 
 impl Clock {
@@ -22,6 +24,7 @@ impl Clock {
         Rc::new(Self {
             devices: RefCell::new(Vec::new()),
             elapsed: Cell::new(0),
+            stopped: RefCell::new(false),
         })
     }
 
@@ -30,7 +33,7 @@ impl Clock {
     }
 
     pub fn tick(&self, elapsed_cycles: u16) {
-        if elapsed_cycles == 0 {
+        if elapsed_cycles == 0 || *self.stopped.borrow() {
             return;
         }
         self.elapsed.set(self.elapsed.get() + elapsed_cycles as u32);
@@ -46,5 +49,16 @@ impl Clock {
 
     pub fn reset(&self) {
         self.elapsed.set(0);
+    }
+
+    pub fn stop(&self) {
+        self.stopped.replace(true);
+        for device in self.devices.borrow().iter() {
+            device.borrow_mut().stop();
+        }
+    }
+
+    pub fn resume(&self) {
+        self.stopped.replace(false);
     }
 }

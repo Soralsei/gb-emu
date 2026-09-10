@@ -2,6 +2,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::clock::Clock;
+use crate::input::{Button, JoypadHandler};
 use crate::{SCREEN_H, SCREEN_W};
 
 use super::memory::mbc::Mbc;
@@ -16,18 +17,6 @@ use super::memory::mmu::Mmu;
 use super::memory::serial::Serial;
 
 const CYCLES_PER_FRAME: u32 = 70224; // 154 lines * 456 T-cycles
-
-#[derive(Copy, Clone)]
-pub enum Button {
-    A,
-    B,
-    Select,
-    Start,
-    Right,
-    Left,
-    Up,
-    Down,
-}
 
 #[derive(Clone)]
 struct IoMemoryHandler<T>(Rc<RefCell<T>>);
@@ -71,21 +60,27 @@ impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
 
 pub struct System {
     cpu: Cpu,
+    clock: Rc<Clock>,
     interrupt_controller: Device<InterruptController>,
+    joypad: Device<JoypadHandler>,
     // timer: Device<Timer>,
     // serial: Device<Serial>,
     current_frame: Box<[u8; SCREEN_W * SCREEN_H]>,
 }
 
 impl System {
-    pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>) -> Self {
+    pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>, is_cgb_override: bool) -> Self {
         let clock = Clock::new();
+        let mbc = Device::new(Mbc::new(boot_rom, rom));
         let interrupt_controller = Device::new(InterruptController::new());
         let serial = Device::new(Serial::new(interrupt_controller.borrow().request()));
-        let timer = Device::new(Timer::new(interrupt_controller.borrow().request()));
+        let timer = Device::new(Timer::new(
+            interrupt_controller.borrow().request(),
+            mbc.borrow().cartridge().is_cgb_only() || is_cgb_override,
+        ));
+        let joypad = Device::new(JoypadHandler::new(interrupt_controller.borrow().request()));
 
         let mut mmu = Mmu::new(clock.clone());
-        let mbc = Device::new(Mbc::new(boot_rom, rom));
 
         clock.attach(timer.0.clone());
         clock.attach(serial.0.clone());
@@ -101,6 +96,8 @@ impl System {
         mmu.add_handler((0xff50, 0xff50), mbc.handler());
         mmu.add_handler((0xa000, 0xbfff), mbc.handler());
 
+        mmu.add_handler((0xFF00, 0xFF00), joypad.handler());
+
         mmu.add_handler((0xFF01, 0xFF02), serial.handler());
         mmu.add_handler((0xFF04, 0xFF07), timer.handler());
 
@@ -110,7 +107,9 @@ impl System {
         let cpu = Cpu::new(mmu, clock.clone());
         Self {
             cpu,
+            clock,
             interrupt_controller,
+            joypad,
             current_frame: Box::new([0; SCREEN_W * SCREEN_H]),
         }
     }
@@ -145,9 +144,11 @@ impl System {
         &self.current_frame[..]
     }
 
-    pub fn set_button(&mut self, b: Button, down: bool) {
-        // TODO: Implement joypad device
-        // self.joypad.borrow_mut().set(b, down);
+    pub fn set_button(&mut self, btn: Button, down: bool) {
+        if self.joypad.borrow_mut().set(btn, down) {
+            self.clock.resume();
+            self.cpu.resume();
+        }
     }
 }
 

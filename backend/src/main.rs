@@ -15,7 +15,7 @@ fn main() {
             Err(_) => None,
         };
     }
-    let mut sys = System::new(boot_rom, rom);
+    let mut sys = System::new(boot_rom, rom, false);
     loop {
         sys.step();
     }
