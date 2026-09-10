@@ -23,4 +23,3 @@ pub fn addressing_number_of_bits(mem_size: usize) -> usize {
     }
     ((mem_size - 1).ilog2() + 1) as usize
 }
-

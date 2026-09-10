@@ -136,7 +136,10 @@ impl Operand {
     // The yaml spells reset vectors in hex ("0x00".."0x38"), but accept plain
     // decimal too so the two notations can't silently diverge.
     pub fn from_vector(value: &str) -> Result<Self, ParseIntError> {
-        match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        match value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
             Some(hex) => Ok(Self::Vector(u8::from_str_radix(hex, 16)?)),
             None => Ok(Self::Vector(value.parse()?)),
         }

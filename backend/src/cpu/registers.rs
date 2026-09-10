@@ -1,7 +1,4 @@
-use crate::{
-    is_bit_set,
-    util::bit_operations::*,
-};
+use crate::{is_bit_set, util::bit_operations::*};
 
 const ZERO_BIT: u8 = 7;
 const SUB_BIT: u8 = 6;
@@ -92,7 +89,7 @@ impl Registers {
             c: 0x00,
             d: 0xFF,
             e: 0x56,
-            f: (Flags::from(0x80)),
+            f: Flags::from(0x80),
             h: 0x00,
             l: 0x0D,
             pc: 0x100,

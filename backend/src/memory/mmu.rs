@@ -88,9 +88,9 @@ impl Mmu {
         }
     }
 
-    /// Bus write, as performed by the CPU: costs a machine cycle.
-    pub fn write(&mut self, addr: u16, value: u8) {
-        self.clock.tick(M_CYCLE);
+    /// Write memory without advancing the clock. For handlers and debug
+    /// tooling, which are not the CPU driving the bus
+    pub fn poke(&mut self, addr: u16, value: u8) {
         match self.handlers.get(&addr) {
             Some(handlers) => {
                 for handler in handlers {
@@ -114,5 +114,11 @@ impl Mmu {
             // normal ram write
             _ => self.memory[addr as usize] = value,
         }
+    }
+
+    /// Bus write, as performed by the CPU: costs a machine cycle.
+    pub fn write(&mut self, addr: u16, value: u8) {
+        self.clock.tick(M_CYCLE);
+        self.poke(addr, value);
     }
 }
