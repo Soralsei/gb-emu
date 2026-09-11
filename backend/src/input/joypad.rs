@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::{
     cpu::interrupt::InterruptRequest,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
@@ -75,27 +77,32 @@ impl Joypad {
     }
 }
 
+/// `Joypad` is `Copy`, so the whole state fits in one `Cell`: get, mutate the
+/// copy, set. No borrow semantics on the bus path at all.
 pub struct JoypadHandler {
     interrupt_request: InterruptRequest,
-    joypad: Joypad,
+    joypad: Cell<Joypad>,
 }
 
 impl JoypadHandler {
     pub fn new(interrupt_request: InterruptRequest) -> Self {
         Self {
             interrupt_request,
-            joypad: Default::default(),
+            joypad: Cell::new(Joypad::default()),
         }
     }
 
-    pub fn set(&mut self, button: Button, down: bool) -> bool {
+    pub fn set(&self, button: Button, down: bool) -> bool {
         self.state_change(|joypad| joypad.set(button, down))
     }
 
-    fn state_change(&mut self, change: impl FnOnce(&mut Joypad)) -> bool {
-        let before = self.joypad.get() & 0x0F;
-        change(&mut self.joypad);
-        let after = self.joypad.get() & 0x0F;
+    fn state_change(&self, change: impl FnOnce(&mut Joypad)) -> bool {
+        let mut joypad = self.joypad.get();
+        let before = joypad.get() & 0x0F;
+        change(&mut joypad);
+        let after = joypad.get() & 0x0F;
+        self.joypad.set(joypad);
+
         let fell = before & !after != 0;
         if fell {
             self.interrupt_request.joypad(true);
@@ -107,13 +114,13 @@ impl JoypadHandler {
 impl MemoryHandler for JoypadHandler {
     fn read(&self, _: &crate::memory::mmu::Mmu, address: u16) -> crate::memory::mmu::MemoryRead {
         if address == 0xFF00 {
-            return MemoryRead::Replace(self.joypad.get());
+            return MemoryRead::Replace(self.joypad.get().get());
         }
         unreachable!("Invalid read in JoypadHandler at address 0x{:04X}", address)
     }
 
     fn write(
-        &mut self,
+        &self,
         _: &crate::memory::mmu::Mmu,
         address: u16,
         value: u8,

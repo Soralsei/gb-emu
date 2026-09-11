@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use super::interrupt::InterruptRequest;
 use crate::{
     clock::{Clocked, M_CYCLE},
@@ -7,7 +9,30 @@ use crate::{
 const TAC_ENABLE: u8 = 2;
 const TIMA_PERIODS: [u16; 4] = [1024, 16, 64, 256];
 
+/// The timer is only ever touched by its own `step` and its own register
+/// handler, which never nest, so one cell at the device boundary is enough and
+/// all of the logic below keeps plain `&mut self`.
 pub struct Timer {
+    state: RefCell<TimerState>,
+}
+
+impl Timer {
+    pub fn new(interrupt_request: InterruptRequest, is_cgb: bool) -> Self {
+        Self {
+            state: RefCell::new(TimerState {
+                interrupt_request,
+                counter: 0,
+                tima: 0,
+                tma: 0,
+                tac: 0,
+                overflowed: false,
+                is_cgb,
+            }),
+        }
+    }
+}
+
+struct TimerState {
     interrupt_request: InterruptRequest,
     counter: u16, // DIV register is its high byte
     tima: u8,     // address 0xFF05
@@ -17,19 +42,7 @@ pub struct Timer {
     is_cgb: bool,
 }
 
-impl Timer {
-    pub fn new(interrupt_request: InterruptRequest, is_cgb: bool) -> Self {
-        Self {
-            interrupt_request,
-            counter: 0,
-            tima: 0,
-            tma: 0,
-            tac: 0,
-            overflowed: false,
-            is_cgb,
-        }
-    }
-
+impl TimerState {
     fn timer_enabled(&self) -> bool {
         is_bit_set!(self.tac, TAC_ENABLE)
     }
@@ -74,6 +87,31 @@ impl Timer {
 
 impl MemoryHandler for Timer {
     fn read(&self, _: &crate::memory::mmu::Mmu, address: u16) -> crate::memory::mmu::MemoryRead {
+        self.state.borrow().read(address)
+    }
+
+    fn write(
+        &self,
+        _: &crate::memory::mmu::Mmu,
+        address: u16,
+        value: u8,
+    ) -> crate::memory::mmu::MemoryWrite {
+        self.state.borrow_mut().write(address, value)
+    }
+}
+
+impl Clocked for Timer {
+    fn step(&self, elapsed_cycles: u16) {
+        self.state.borrow_mut().step(elapsed_cycles);
+    }
+
+    fn reset_div(&self) {
+        self.state.borrow_mut().counter = 0;
+    }
+}
+
+impl TimerState {
+    fn read(&self, address: u16) -> MemoryRead {
         match address {
             0xFF04 => MemoryRead::Replace((self.counter >> 8) as u8),
             0xFF05 => MemoryRead::Replace(self.tima),
@@ -83,12 +121,7 @@ impl MemoryHandler for Timer {
         }
     }
 
-    fn write(
-        &mut self,
-        _: &crate::memory::mmu::Mmu,
-        address: u16,
-        value: u8,
-    ) -> crate::memory::mmu::MemoryWrite {
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match address {
             0xFF04 => {
                 self.state_change(0, self.tac);
@@ -106,9 +139,7 @@ impl MemoryHandler for Timer {
         }
         MemoryWrite::Pass
     }
-}
 
-impl Clocked for Timer {
     fn step(&mut self, elapsed_cycles: u16) {
         for _ in 0..elapsed_cycles / M_CYCLE {
             if self.overflowed {
@@ -118,9 +149,5 @@ impl Clocked for Timer {
             }
             self.state_change(self.counter.wrapping_add(M_CYCLE), self.tac);
         }
-    }
-
-    fn stop(&mut self) {
-        self.counter = 0;
     }
 }

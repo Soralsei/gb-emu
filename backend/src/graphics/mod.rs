@@ -1,3 +1,4 @@
+pub mod oam;
 pub mod ppu;
 mod registers;
 

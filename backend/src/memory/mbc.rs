@@ -1,4 +1,6 @@
 #![allow(unused)]
+use std::cell::{Cell, RefCell};
+
 use crate::{is_bit_set, util::bit_operations::addressing_number_of_bits};
 
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite};
@@ -227,6 +229,7 @@ impl MemoryBank for Mbc1 {
                 self.advanced_mode = value & 0b1 != 0;
                 MemoryWrite::Block
             }
+            0xA000..=0xBFFF => todo!(),
             _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
         }
     }
@@ -236,7 +239,9 @@ pub struct Cartridge {
     title: String,
     cgb: bool,
     cgb_only: bool,
-    mbc: MbcType,
+    /// Banking registers are the only mutable cartridge state, and nothing
+    /// re-enters the cartridge, so one cell here keeps `MemoryBank` on `&mut self`.
+    mbc: RefCell<MbcType>,
     rom_size: usize,
     ram_size: usize,
 }
@@ -261,7 +266,7 @@ impl Cartridge {
             title: title.to_string(),
             cgb: is_bit_set!(rom[0x143], CGB),
             cgb_only: is_bit_set!(rom[0x143], CGB_ONLY),
-            mbc: MbcType::new(mbc_type, rom, rom_size, ram_size),
+            mbc: RefCell::new(MbcType::new(mbc_type, rom, rom_size, ram_size)),
             rom_size,
             ram_size,
         }
@@ -274,11 +279,11 @@ impl Cartridge {
 
 impl MemoryHandler for Cartridge {
     fn read(&self, mmu: &super::mmu::Mmu, address: u16) -> MemoryRead {
-        self.mbc.read(address)
+        self.mbc.borrow().read(address)
     }
 
-    fn write(&mut self, mmu: &super::mmu::Mmu, address: u16, value: u8) -> MemoryWrite {
-        self.mbc.write(address, value)
+    fn write(&self, mmu: &super::mmu::Mmu, address: u16, value: u8) -> MemoryWrite {
+        self.mbc.borrow_mut().write(address, value)
     }
 }
 
@@ -302,7 +307,12 @@ impl fmt::Display for Cartridge {
             RAM size : {},
             ROM size : {} KiB
         }}",
-            self.title, self.mbc, self.cgb, self.cgb_only, ram_size, self.rom_size
+            self.title,
+            self.mbc.borrow(),
+            self.cgb,
+            self.cgb_only,
+            ram_size,
+            self.rom_size
         )
     }
 }
@@ -310,7 +320,7 @@ impl fmt::Display for Cartridge {
 pub struct Mbc {
     cart: Cartridge,
     boot_rom: Vec<u8>,
-    boot_rom_enabled: bool,
+    boot_rom_enabled: Cell<bool>,
 }
 
 impl Mbc {
@@ -322,12 +332,12 @@ impl Mbc {
             Some(boot_rom) => Self {
                 cart,
                 boot_rom: boot_rom,
-                boot_rom_enabled: true,
+                boot_rom_enabled: Cell::new(true),
             },
             None => Self {
                 cart,
                 boot_rom: Vec::with_capacity(0),
-                boot_rom_enabled: false,
+                boot_rom_enabled: Cell::new(false),
             },
         }
     }
@@ -344,18 +354,18 @@ impl Mbc {
 
 impl MemoryHandler for Mbc {
     fn read(&self, mmu: &super::mmu::Mmu, address: u16) -> MemoryRead {
-        if self.boot_rom_enabled && self.in_boot_rom(address) {
+        if self.boot_rom_enabled.get() && self.in_boot_rom(address) {
             return MemoryRead::Replace(self.boot_rom[address as usize]);
         }
         self.cart.read(mmu, address)
     }
 
-    fn write(&mut self, mmu: &super::mmu::Mmu, address: u16, value: u8) -> MemoryWrite {
-        if self.boot_rom_enabled && self.in_boot_rom(address) {
+    fn write(&self, mmu: &super::mmu::Mmu, address: u16, value: u8) -> MemoryWrite {
+        if self.boot_rom_enabled.get() && self.in_boot_rom(address) {
             eprintln!("Write to boot rom detected ?!");
             return MemoryWrite::Block;
         } else if address == 0xFF50 {
-            self.boot_rom_enabled = false;
+            self.boot_rom_enabled.set(false);
             return MemoryWrite::Block;
         }
         self.cart.write(mmu, address, value)

@@ -1,4 +1,3 @@
-use std::cell::RefMut;
 use std::rc::Rc;
 
 use super::instructions::{Instruction, Opcode, Timing};
@@ -161,26 +160,45 @@ impl Dst<u8> for DMem<Imm8> {
     }
 }
 
+/// What the CPU is doing between instructions. HALT, a speed-switch pause and
+/// STOP are all "the CPU is inert while devices keep going"; they differ only
+/// in what ends them and which devices advance meanwhile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Running,
+    /// HALT: resumes when an enabled interrupt is pending.
+    Halted,
+    /// STOP with a speed switch armed: the CPU is inert for a fixed span and
+    /// DIV is frozen, but the PPU keeps running.
+    SwitchPause {
+        remaining: u16,
+    },
+    /// STOP with no switch armed: only a joypad press resumes.
+    Stopped,
+}
+
 #[allow(unused)]
 pub struct Cpu {
     pub registers: Registers,
-    ime: bool,
-    pub halted: bool,
     mmu: Mmu,
+    ime: bool,
     clock: Rc<Clock>,
-    stopped: bool,
+    mode: Mode,
 }
 
 impl Cpu {
-    pub fn new(mmu: Mmu, clock: Rc<Clock>) -> Cpu {
+    pub fn new(mmu: Mmu, clock: Rc<Clock>, is_cgb: bool) -> Cpu {
         Cpu {
-            registers: Registers::new(),
+            registers: Registers::new(is_cgb),
             ime: true,
-            halted: false,
             mmu,
             clock,
-            stopped: false,
+            mode: Mode::Running,
         }
+    }
+
+    pub fn halt(&mut self) {
+        self.mode = Mode::Halted;
     }
 
     /// Tick the cycles this unit of work needs on top of the ones its bus
@@ -194,9 +212,26 @@ impl Cpu {
     }
 
     pub fn execute_instruction(&mut self) -> usize {
-        if self.halted || self.stopped {
-            self.spend(M_CYCLE as usize);
-            return M_CYCLE as usize;
+        match self.mode {
+            // DIV is frozen for the duration, so this cannot go through
+            // `spend`: only the fixed-rate devices advance.
+            Mode::SwitchPause { remaining } => {
+                let step = M_CYCLE.min(remaining);
+                self.clock.tick_fixed(step);
+                // `spend` tops up against `elapsed`, so the next instruction
+                // must not be credited with the pause.
+                self.clock.reset();
+                self.mode = match remaining - step {
+                    0 => Mode::Running,
+                    left => Mode::SwitchPause { remaining: left },
+                };
+                return step as usize;
+            }
+            Mode::Halted | Mode::Stopped => {
+                self.spend(M_CYCLE as usize);
+                return M_CYCLE as usize;
+            }
+            Mode::Running => (),
         }
 
         let opcode = self.fetch_u8();
@@ -226,18 +261,18 @@ impl Cpu {
         self.spend(cycles)
     }
 
-    pub fn handle_interrupts(
-        &mut self,
-        interrupt_controller: RefMut<'_, InterruptController>,
-    ) -> usize {
-        if self.stopped {
-            return 0;
-        }
-        // TODO: implement halt bug
-        if self.halted {
-            if let Some(_) = interrupt_controller.peek() {
-                self.halted = false;
+    pub fn handle_interrupts(&mut self, interrupt_controller: &InterruptController) -> usize {
+        match self.mode {
+            // Neither form of STOP is left by an interrupt: the pause runs to
+            // its own end, and STOP mode waits on the joypad.
+            Mode::Stopped | Mode::SwitchPause { .. } => return 0,
+            // TODO: implement halt bug
+            Mode::Halted => {
+                if let Some(_) = interrupt_controller.peek() {
+                    self.mode = Mode::Running;
+                }
             }
+            Mode::Running => (),
         }
         if !self.ime {
             return 0;
@@ -248,7 +283,7 @@ impl Cpu {
             None => return 0,
         };
         self.interrupt(value);
-        self.halted = false;
+        self.mode = Mode::Running;
 
         // interrupt handling always consumes exactly 20 cycles.
         // Share the 20 cycles base with potential bus cycles
@@ -310,41 +345,56 @@ impl Cpu {
     }
 
     pub fn stop(&mut self) {
-        let pending = self.mmu.peek(0xFFFF) & self.mmu.peek(0xFF0F) & 0x1F;
+        eprintln!("Hit a stop instruction");
+        let interrupt_pending = self.mmu.peek(0xFFFF) & self.mmu.peek(0xFF0F) & 0x1F;
         let joyp = self.mmu.peek(0xFF00) & 0x0F;
 
+        // If a button is being held on a selected line in JOYP
         if joyp != 0x0F {
-            if pending == 0 {
+            // No pending interrupt
+            if interrupt_pending == 0 {
                 // STOP => 2 bytes
                 let _ = self.fetch_u8();
-                self.halted = true;
+                self.mode = Mode::Halted;
             }
             return;
         }
 
-        // if KEY1 & SPEED_SWITCH {
-        //     if pending == 0 {
-        //         let _ = self.fetch_u8();
-        //         self.halted = true;
-        //     }
-        //     if !self.ime {
-        //         // Maybe
-        //         return Err(StopGlitchError);
-        //     }
-        //     return;
-        // }
+        if self.clock.switch_armed() {
+            if interrupt_pending == 0 {
+                // STOP => 2 bytes
+                let _ = self.fetch_u8();
+            }
+            //     if !self.ime {
+            //         // Maybe
+            //         return Err(StopGlitchError);
+            //     }
+            self.clock.reset_div();
+            self.clock.switch_speed();
+            // The CPU sits out the next 2050 M-cycles. Modelling it as a mode
+            // rather than one burst of cycles keeps the PPU advancing through
+            // the pause while DIV stays frozen.
+            self.mode = Mode::SwitchPause {
+                remaining: 2050 * M_CYCLE,
+            };
+            return;
+        }
 
         // If no pending speed switch and no JOYP currently pressed
-        if pending == 0 {
+        if interrupt_pending == 0 {
             // STOP => 2 bytes
             let _ = self.fetch_u8();
         }
         // For both, enter STOP mode and reset DIV
-        self.stopped = true;
+        self.mode = Mode::Stopped;
         self.clock.stop();
     }
 
+    /// A joypad press leaves STOP mode. Nothing else does, and no other mode
+    /// is left this way.
     pub fn resume(&mut self) {
-        self.stopped = false
+        if self.mode == Mode::Stopped {
+            self.mode = Mode::Running;
+        }
     }
 }

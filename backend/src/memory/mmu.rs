@@ -1,26 +1,31 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
 use crate::clock::{Clock, M_CYCLE};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRead {
     Replace(u8),
     Pass,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryWrite {
     Replace(u8),
     Pass,
     Block,
 }
 
+/// A memory-mapped device. Handlers are shared (`Rc`) and keep their own
+/// interior mutability, so a bus access never needs a mutable borrow of the
+/// device and cannot conflict with that device being stepped by the clock.
 pub trait MemoryHandler {
     fn read(&self, mmu: &Mmu, address: u16) -> MemoryRead;
-    fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite;
+    fn write(&self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite;
 }
 
 #[allow(unused)]
 pub struct Mmu {
-    pub handlers: BTreeMap<u16, Vec<Rc<RefCell<dyn MemoryHandler>>>>,
+    pub handlers: BTreeMap<u16, Vec<Rc<dyn MemoryHandler>>>,
     clock: Rc<Clock>,
     memory: [u8; 0x10000],
     pub interrupts_enable: u8,
@@ -38,21 +43,12 @@ impl Mmu {
         }
     }
 
-    pub fn add_handler<T: MemoryHandler + 'static>(
-        &mut self,
-        address_range: (u16, u16),
-        handler: T,
-    ) {
-        let handler = Rc::new(RefCell::new(handler));
+    pub fn add_handler(&mut self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
         for address in address_range.0..=address_range.1 {
-            if self.handlers.contains_key(&address) {
-                match self.handlers.get_mut(&address) {
-                    Some(handler_list) => handler_list.push(handler.clone()),
-                    None => {}
-                }
-            } else {
-                self.handlers.insert(address, vec![handler.clone()]);
-            }
+            self.handlers
+                .entry(address)
+                .or_default()
+                .push(handler.clone());
         }
     }
 
@@ -65,20 +61,14 @@ impl Mmu {
     /// Observe memory without advancing the clock. For handlers and debug
     /// tooling, which are not the CPU driving the bus.
     pub fn peek(&self, addr: u16) -> u8 {
-        match self.handlers.get(&addr) {
-            Some(handlers) => {
-                for handler in handlers {
-                    match handler.borrow().read(self, addr) {
-                        MemoryRead::Replace(value) => return value,
-                        MemoryRead::Pass => {}
-                    }
+        if let Some(handlers) = self.handlers.get(&addr) {
+            for handler in handlers {
+                match handler.read(self, addr) {
+                    MemoryRead::Replace(value) => return value,
+                    MemoryRead::Pass => (),
                 }
             }
-            None => {
-                // #[cfg(feature="debug")]
-                // println!("[MMU] No explicit handler for address 0x{:04x}", addr);
-            }
-        };
+        }
 
         match addr {
             // echo ram read
@@ -91,21 +81,29 @@ impl Mmu {
     /// Write memory without advancing the clock. For handlers and debug
     /// tooling, which are not the CPU driving the bus
     pub fn poke(&mut self, addr: u16, value: u8) {
-        match self.handlers.get(&addr) {
+        // Resolve the handler chain first: handlers only ever see `&Mmu`, so the
+        // backing store is written after their borrow of `self` has ended.
+        let outcome = match self.handlers.get(&addr) {
             Some(handlers) => {
+                let mut outcome = MemoryWrite::Pass;
                 for handler in handlers {
-                    match handler.borrow_mut().write(self, addr, value) {
-                        MemoryWrite::Replace(v) => {
-                            self.memory[addr as usize] = v;
-                            return;
-                        }
+                    match handler.write(self, addr, value) {
                         MemoryWrite::Pass => (),
-                        MemoryWrite::Block => return,
+                        decided => {
+                            outcome = decided;
+                            break;
+                        }
                     }
                 }
+                outcome
             }
-            None => (),
-            // None => println!("[MMU] No explicit handler for address 0x{:04x}", addr),
+            None => MemoryWrite::Pass,
+        };
+
+        let value = match outcome {
+            MemoryWrite::Block => return,
+            MemoryWrite::Replace(replacement) => replacement,
+            MemoryWrite::Pass => value,
         };
 
         match addr {

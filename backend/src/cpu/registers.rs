@@ -82,16 +82,33 @@ pub struct Registers {
 }
 
 impl Registers {
-    pub fn new() -> Registers {
+    /// Post-boot register state. Software reads `A` to tell which console it is
+    /// running on, so this has to agree with the rest of the system: a Color
+    /// value here makes a ROM arm KEY1 and execute STOP on a monochrome build.
+    pub fn new(is_cgb: bool) -> Registers {
+        if is_cgb {
+            return Registers {
+                a: 0x11,
+                b: 0x00,
+                c: 0x00,
+                d: 0xFF,
+                e: 0x56,
+                f: Flags::from(0x80),
+                h: 0x00,
+                l: 0x0D,
+                pc: 0x100,
+                sp: 0xfffe,
+            };
+        }
         Registers {
-            a: 0x11,
+            a: 0x01,
             b: 0x00,
-            c: 0x00,
-            d: 0xFF,
-            e: 0x56,
-            f: Flags::from(0x80),
-            h: 0x00,
-            l: 0x0D,
+            c: 0x13,
+            d: 0x00,
+            e: 0xD8,
+            f: Flags::from(0xB0),
+            h: 0x01,
+            l: 0x4D,
             pc: 0x100,
             sp: 0xfffe,
         }

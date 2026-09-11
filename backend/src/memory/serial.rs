@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
 use crate::{clock::Clocked, cpu::interrupt::InterruptRequest, is_bit_set};
 
@@ -6,7 +8,21 @@ const CLOCK_SELECT: u8 = 0;
 const CLOCK_SPEED: u8 = 1;
 const TRANSFER_ENABLE: u8 = 7;
 
+/// Like the timer, serial is only reached by its own `step` and its own
+/// register handler, so one cell at the boundary keeps the logic on `&mut self`.
 pub struct Serial {
+    state: RefCell<SerialState>,
+}
+
+impl Serial {
+    pub fn new(interrupt_request: InterruptRequest) -> Self {
+        Self {
+            state: RefCell::new(SerialState::new(interrupt_request)),
+        }
+    }
+}
+
+struct SerialState {
     interrupt_request: InterruptRequest,
     send_byte: u8,         // Next byte
     recv_byte: u8,         // Received btye
@@ -17,8 +33,8 @@ pub struct Serial {
     log: String,
 }
 
-impl Serial {
-    pub fn new(interrupt_request: InterruptRequest) -> Self {
+impl SerialState {
+    fn new(interrupt_request: InterruptRequest) -> Self {
         Self {
             interrupt_request,
             send_byte: 0x0,
@@ -48,6 +64,22 @@ impl Serial {
 
 impl MemoryHandler for Serial {
     fn read(&self, _: &Mmu, address: u16) -> MemoryRead {
+        self.state.borrow().read(address)
+    }
+
+    fn write(&self, _: &Mmu, address: u16, value: u8) -> MemoryWrite {
+        self.state.borrow_mut().write(address, value)
+    }
+}
+
+impl Clocked for Serial {
+    fn step(&self, elapsed_cycles: u16) {
+        self.state.borrow_mut().step(elapsed_cycles);
+    }
+}
+
+impl SerialState {
+    fn read(&self, address: u16) -> MemoryRead {
         match address {
             0xFF01 => MemoryRead::Replace(self.send_byte),
             0xFF02 => MemoryRead::Replace(self.get_sc()),
@@ -55,7 +87,7 @@ impl MemoryHandler for Serial {
         }
     }
 
-    fn write(&mut self, _: &Mmu, address: u16, value: u8) -> MemoryWrite {
+    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match address {
             0xFF01 => {
                 self.send_byte = value;
@@ -73,9 +105,7 @@ impl MemoryHandler for Serial {
         }
         MemoryWrite::Block
     }
-}
 
-impl Clocked for Serial {
     fn step(&mut self, elapsed_cycles: u16) {
         if !self.transfer_enable {
             return;

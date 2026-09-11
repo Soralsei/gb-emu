@@ -1,8 +1,8 @@
-use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::clock::Clock;
 use crate::input::{Button, JoypadHandler};
+use crate::memory::mmu::{MemoryRead, MemoryWrite};
 use crate::{SCREEN_H, SCREEN_W};
 
 use super::memory::mbc::Mbc;
@@ -18,93 +18,89 @@ use super::memory::serial::Serial;
 
 const CYCLES_PER_FRAME: u32 = 70224; // 154 lines * 456 T-cycles
 
-#[derive(Clone)]
-struct IoMemoryHandler<T>(Rc<RefCell<T>>);
-struct Device<T>(Rc<RefCell<T>>);
+/// KEY1 (0xFF4D). Both meaningful bits — current speed and the armed switch —
+/// are clock state, so the handler is a pure view onto `Clock`.
+struct SpeedSwitch(Rc<Clock>);
 
-impl<T> Device<T> {
-    pub fn new(dev: T) -> Self {
-        Self(Rc::new(RefCell::new(dev)))
+impl MemoryHandler for SpeedSwitch {
+    fn read(&self, _mmu: &Mmu, _address: u16) -> MemoryRead {
+        MemoryRead::Replace(self.0.key1())
     }
 
-    pub fn borrow<'a>(&'a self) -> Ref<'a, T> {
-        self.0.borrow()
-    }
-
-    pub fn borrow_mut<'a>(&'a self) -> RefMut<'a, T> {
-        self.0.borrow_mut()
-    }
-}
-
-impl<T: MemoryHandler> Device<T> {
-    pub fn handler(&self) -> IoMemoryHandler<T> {
-        IoMemoryHandler(self.0.clone())
+    fn write(&self, _mmu: &Mmu, _address: u16, value: u8) -> MemoryWrite {
+        self.0.arm(value & 1 != 0);
+        // The handler is authoritative: keep the raw backing store out of it,
+        // otherwise a stale byte shadows `Clock::key1`.
+        MemoryWrite::Block
     }
 }
 
-impl<T: MemoryHandler> MemoryHandler for IoMemoryHandler<T> {
-    fn read(&self, mmu: &Mmu, address: u16) -> crate::memory::mmu::MemoryRead {
-        match self.0.try_borrow_mut() {
-            Ok(device) => return device.read(mmu, address),
-            Err(e) => panic!("Recursive read at 0x{:04X}: {}", address, e),
-        }
-    }
+struct Unmapped;
 
-    fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> crate::memory::mmu::MemoryWrite {
-        match self.0.try_borrow_mut() {
-            Ok(mut device) => return device.write(mmu, address, value),
-            Err(e) => panic!("Recursive write at 0x{:04X}: {}", address, e),
-        }
+impl MemoryHandler for Unmapped {
+    fn read(&self, _: &Mmu, _: u16) -> MemoryRead {
+        MemoryRead::Replace(0xFF)
+    }
+    fn write(&self, _: &Mmu, _: u16, _: u8) -> MemoryWrite {
+        MemoryWrite::Block
     }
 }
 
 pub struct System {
     cpu: Cpu,
     clock: Rc<Clock>,
-    interrupt_controller: Device<InterruptController>,
-    joypad: Device<JoypadHandler>,
-    // timer: Device<Timer>,
-    // serial: Device<Serial>,
+    interrupt_controller: Rc<InterruptController>,
+    joypad: Rc<JoypadHandler>,
     current_frame: Box<[u8; SCREEN_W * SCREEN_H]>,
 }
 
 impl System {
     pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>, is_cgb_override: bool) -> Self {
-        let clock = Clock::new();
-        let mbc = Device::new(Mbc::new(boot_rom, rom));
-        let interrupt_controller = Device::new(InterruptController::new());
-        let serial = Device::new(Serial::new(interrupt_controller.borrow().request()));
-        let timer = Device::new(Timer::new(
-            interrupt_controller.borrow().request(),
-            mbc.borrow().cartridge().is_cgb_only() || is_cgb_override,
-        ));
-        let joypad = Device::new(JoypadHandler::new(interrupt_controller.borrow().request()));
+        let mbc = Rc::new(Mbc::new(boot_rom, rom));
+        let is_cgb = mbc.cartridge().is_cgb_only() || is_cgb_override;
+
+        let clock = Clock::new(is_cgb);
+
+        let interrupt_controller = Rc::new(InterruptController::new());
+        let serial = Rc::new(Serial::new(interrupt_controller.request()));
+        let timer = Rc::new(Timer::new(interrupt_controller.request(), is_cgb));
+        let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
 
         let mut mmu = Mmu::new(clock.clone());
 
-        clock.attach(timer.0.clone());
-        clock.attach(serial.0.clone());
+        clock.attach(timer.clone());
+        clock.attach(serial.clone());
+        //clock.attach_fixed(ppu.clone())
+        //clock.attach_fixed(apu.clone())
 
         #[cfg(feature = "blaarg")]
         {
             println!("Added blaarg debug feature");
-            let spy = IoMemoryHandler(Rc::new(RefCell::new(BlaargSpy())));
-            mmu.add_handler((0xA000, 0xBFFF), spy);
+            mmu.add_handler((0xA000, 0xBFFF), Rc::new(BlaargSpy()));
         }
 
-        mmu.add_handler((0x0000, 0x7fff), mbc.handler());
-        mmu.add_handler((0xff50, 0xff50), mbc.handler());
-        mmu.add_handler((0xa000, 0xbfff), mbc.handler());
+        mmu.add_handler((0x0000, 0x7FFF), mbc.clone());
+        mmu.add_handler((0xFF50, 0xFF50), mbc.clone());
+        mmu.add_handler((0xA000, 0xBFFF), mbc.clone());
 
-        mmu.add_handler((0xFF00, 0xFF00), joypad.handler());
+        mmu.add_handler((0xFF00, 0xFF00), joypad.clone());
 
-        mmu.add_handler((0xFF01, 0xFF02), serial.handler());
-        mmu.add_handler((0xFF04, 0xFF07), timer.handler());
+        mmu.add_handler((0xFF01, 0xFF02), serial.clone());
+        mmu.add_handler((0xFF04, 0xFF07), timer.clone());
 
-        mmu.add_handler((0xff0f, 0xff0f), interrupt_controller.handler());
-        mmu.add_handler((0xffff, 0xffff), interrupt_controller.handler());
+        mmu.add_handler((0xFF0F, 0xFF0F), interrupt_controller.clone());
+        mmu.add_handler((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(clock.clone())));
+        if !is_cgb {
+            let unmapped = Rc::new(Unmapped);
+            mmu.add_handler((0xFF4D, 0xFF4D), unmapped.clone()); // KEY1
+            mmu.add_handler((0xFF4F, 0xFF4F), unmapped.clone()); // VBK
+            mmu.add_handler((0xFF51, 0xFF55), unmapped.clone()); // HDMA1-5
+            mmu.add_handler((0xFF68, 0xFF6B), unmapped.clone()); // BCPS/BCPD/OCPS/OCPD
+            mmu.add_handler((0xFF70, 0xFF70), unmapped);
+        }
+        mmu.add_handler((0xFFFF, 0xFFFF), interrupt_controller.clone());
 
-        let cpu = Cpu::new(mmu, clock.clone());
+        let cpu = Cpu::new(mmu, clock.clone(), is_cgb);
         Self {
             cpu,
             clock,
@@ -116,9 +112,7 @@ impl System {
 
     pub fn step(&mut self) -> usize {
         let mut elapsed = self.cpu.execute_instruction();
-        elapsed += self
-            .cpu
-            .handle_interrupts(self.interrupt_controller.borrow_mut());
+        elapsed += self.cpu.handle_interrupts(&self.interrupt_controller);
         elapsed
     }
 
@@ -145,7 +139,7 @@ impl System {
     }
 
     pub fn set_button(&mut self, btn: Button, down: bool) {
-        if self.joypad.borrow_mut().set(btn, down) {
+        if self.joypad.set(btn, down) {
             self.clock.resume();
             self.cpu.resume();
         }

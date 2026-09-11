@@ -6,7 +6,7 @@ impl MemoryHandler for BlaargSpy {
         MemoryRead::Pass
     }
 
-    fn write(&mut self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite {
+    fn write(&self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite {
         if address == 0xA000 {
             let previous = mmu.peek(address);
             if previous == 0x80 {

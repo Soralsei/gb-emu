@@ -284,7 +284,7 @@ pub fn ccf(cpu: &mut Cpu) -> Timing {
 }
 
 pub fn halt(cpu: &mut Cpu) -> Timing {
-    cpu.halted = true;
+    cpu.halt();
     Timing::Normal
 }
 
