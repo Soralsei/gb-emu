@@ -31,7 +31,7 @@ enum MbcType {
 impl MbcType {
     pub fn new(code: u8, rom: Vec<u8>, rom_size: usize, ram_size: usize) -> MbcType {
         match code {
-            0x00 => MbcType::MbcNone(MbcNone { rom }),
+            0x00 => MbcType::MbcNone(MbcNone::new(rom, ram_size)),
             0x01 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
             _ => unimplemented!("Mbc type 0x{:02X} not yet implemented", code),
         }
@@ -81,28 +81,54 @@ impl fmt::Display for MbcType {
 
 struct MbcNone {
     rom: Vec<u8>,
+    ram: Vec<u8>,
+}
+
+impl MbcNone {
+    pub fn new(rom: Vec<u8>, ram_size: usize) -> Self {
+        Self {
+            rom,
+            ram: vec![0u8; ram_size],
+        }
+    }
+
+    fn has_ram(&self) -> bool {
+        self.ram.is_empty()
+    }
 }
 
 impl MemoryBank for MbcNone {
     fn read(&self, address: u16) -> MemoryRead {
-        if address <= 0x7FFF {
-            return MemoryRead::Replace(self.rom[address as usize]);
+        match address {
+            0x0000..=0x7FFF => MemoryRead::Replace(self.rom[address as usize]),
+            0xA000..=0xBFFF => {
+                if !self.has_ram() {
+                    return MemoryRead::Replace(0xFF);
+                }
+                MemoryRead::Replace(self.ram[address as usize & (RAM_BANK_SIZE - 1)])
+            }
+            _ => unreachable!("Invalid read in MbcNone at address 0x{:04X}", address),
         }
-        MemoryRead::Pass
     }
 
     fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match address {
-            0..=0x7FFF => MemoryWrite::Block,
-            0xA000..=0xBFFF => MemoryWrite::Pass,
+            0..=0x7FFF => (),
+            0xA000..=0xBFFF => {
+                if self.has_ram() {
+                    self.ram[address as usize & (RAM_BANK_SIZE - 1)] = value;
+                }
+            }
             _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
         }
+        MemoryWrite::Block
     }
 }
 
 struct Mbc1 {
     rom: Vec<u8>,
     ram: Vec<u8>,
+    ram_mask: usize,
     // Registers
     ram_enable: bool, // written at 0x
     rom_bank_number: u8,
@@ -112,14 +138,33 @@ struct Mbc1 {
 
 impl Mbc1 {
     pub fn new(rom: Vec<u8>, ram_size: usize) -> Self {
+        debug_assert!(ram_size == 0 || ram_size.is_power_of_two());
         Self {
             rom,
             ram: vec![0u8; ram_size],
+            ram_mask: ram_size.saturating_sub(1),
             ram_enable: false,
             rom_bank_number: 0x00,
             ram_bank_number: 0x00,
             advanced_mode: false,
         }
+    }
+
+    /// Offset of `address` within cart RAM, or None when nothing answers (no RAM
+    /// chip, or RAM not enabled). The bus floats then: reads 0xFF, writes vanish.
+    fn ram_offset(&self, address: u16) -> Option<usize> {
+        if !self.has_ram() || !self.ram_enable {
+            return None;
+        }
+        let offset = address as usize & (RAM_BANK_SIZE - 1);
+        // A >512 KiB ROM spends the 2-bit register on upper ROM bank bits, so RAM
+        // is pinned to bank 0.
+        let bank = if self.advanced_mode && !self.rom_needs_extended_banking() {
+            (self.ram_bank_number & 0b11) as usize
+        } else {
+            0
+        };
+        Some((bank * RAM_BANK_SIZE | offset) % self.ram_mask)
     }
 
     fn maybe_one_bank(bank_number: u8) -> u8 {
@@ -131,7 +176,7 @@ impl Mbc1 {
     }
 
     fn has_ram(&self) -> bool {
-        self.ram.len() > 0
+        self.ram.is_empty()
     }
 
     fn rom_needs_extended_banking(&self) -> bool {
@@ -179,31 +224,21 @@ impl MemoryBank for Mbc1 {
 
                 let mut bank_number = bank2_number | corrected_bank1;
                 // Get the address inside the selected bank
-                // strictly equivalent to bank_number * ROM_BANK_SIZE + (address - 0x3FFF)
+                // strictly equivalent to bank_number * ROM_BANK_SIZE + (address - 0x4000)
                 let bank_addr: usize =
-                    bank_number as usize * ROM_BANK_SIZE | (address & 0x3FFF) as usize;
+                    bank_number as usize * ROM_BANK_SIZE | (address as usize & (ROM_BANK_SIZE - 1));
 
                 MemoryRead::Replace(self.rom[bank_addr])
             }
             0xA000..=0xBFFF => {
                 // Reads from disabled ram return open-bus values
-                if !self.ram_enable {
-                    return MemoryRead::Replace(0xFF);
-                }
-                if self.rom_needs_extended_banking() {
-                    return MemoryRead::Replace(self.ram[address as usize]);
-                }
-                let bank = if self.advanced_mode {
-                    self.ram_bank_number & 0b11
-                } else {
-                    0
+                let read_value = match self.ram_offset(address) {
+                    Some(offset) => self.ram[offset],
+                    None => 0xFF,
                 };
-                // Same here, get address inside ram bank
-                // equivalent to bank_number * RAM_BANK_SIZE + (address - 0xA000)
-                let ram_addr = bank as usize * RAM_BANK_SIZE | (address & 0xA000) as usize;
-                MemoryRead::Replace(self.ram[ram_addr])
+                MemoryRead::Replace(read_value)
             }
-            _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
+            _ => unreachable!("Invalid memory read at address 0x{:04X}", address),
         }
     }
 
@@ -229,7 +264,12 @@ impl MemoryBank for Mbc1 {
                 self.advanced_mode = value & 0b1 != 0;
                 MemoryWrite::Block
             }
-            0xA000..=0xBFFF => todo!(),
+            0xA000..=0xBFFF => {
+                if let Some(offset) = self.ram_offset(address) {
+                    self.ram[offset] = value;
+                }
+                MemoryWrite::Block
+            }
             _ => unreachable!("Invalid memory write at address 0x{:04X}", address),
         }
     }
