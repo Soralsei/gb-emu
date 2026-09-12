@@ -161,7 +161,6 @@ pub struct PpuRegisters {
     bgp: u8,
     obp0: u8,
     obp1: u8,
-    oam_dma: u8,
 }
 
 impl PpuRegisters {
@@ -172,17 +171,17 @@ impl PpuRegisters {
     pub fn read(&self, address: u16) -> u8 {
         match address {
             0xFF40 => self.lcdc.into(),
-            0xFF41 => self.ly,
-            0xFF42 => self.lyc,
-            0xFF43 => self.stat.into(),
-            0xFF44 => self.wx,
-            0xFF45 => self.wy,
-            0xFF46 => self.scy,
-            0xFF47 => self.scx,
-            0xFF48 => self.bgp,
-            0xFF49 => self.obp0,
-            0xFF4A => self.obp1,
-            0xFF4B => self.oam_dma,
+            0xFF41 => self.stat.into(),
+            0xFF42 => self.scy,
+            0xFF43 => self.scx,
+            0xFF44 => self.ly,
+            0xFF45 => self.lyc,
+            // 0xFF46 handled by OAM DMA device
+            0xFF47 => self.bgp,
+            0xFF48 => self.obp0,
+            0xFF49 => self.obp1,
+            0xFF4A => self.wy,
+            0xFF4B => self.wx,
             _ => unreachable!("Ppu register at address 0x{:04X} does not exist", address),
         }
     }
@@ -190,24 +189,24 @@ impl PpuRegisters {
     pub fn write(&mut self, address: u16, value: u8) {
         match address {
             0xFF40 => self.lcdc = value.into(),
+            // STAT bits 0-2 are read-only, LcdStat::set only takes bits 3-6
+            0xFF41 => self.stat.set(value),
+            0xFF42 => self.scy = value,
+            0xFF43 => self.scx = value,
             // LY is read-only, the PPU is the only one driving it (see set_ly)
-            0xFF41 => {}
+            0xFF44 => {}
             // writing LYC re-evaluates the coincidence flag immediately
-            0xFF42 => {
+            0xFF45 => {
                 self.lyc = value;
                 self.stat.lyc_ly_eq = self.ly == self.lyc;
             }
-            // STAT bits 0-2 are read-only, LcdStat::set only takes bits 3-6
-            0xFF43 => self.stat.set(value),
-            0xFF44 => self.wx = value,
-            0xFF45 => self.wy = value,
-            0xFF46 => self.scy = value,
-            0xFF47 => self.scx = value,
-            0xFF48 => self.bgp = value,
-            0xFF49 => self.obp0 = value,
-            0xFF4A => self.obp1 = value,
+            // 0xFF46 handled by OAM DMA device
+            0xFF47 => self.bgp = value,
+            0xFF48 => self.obp0 = value,
+            0xFF49 => self.obp1 = value,
+            0xFF4A => self.wy = value,
+            0xFF4B => self.wx = value,
             // the actual OAM transfer is started by the Ppu memory handler
-            0xFF4B => self.oam_dma = value,
             _ => unreachable!("Ppu register at address 0x{:04X} does not exist", address),
         }
     }

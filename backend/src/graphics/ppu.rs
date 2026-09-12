@@ -124,6 +124,16 @@ pub struct Ppu {
 }
 
 impl Ppu {
+    pub fn new(interrupt_request: InterruptRequest) -> Self {
+        Self {
+            registers: Default::default(),
+            interrupt_request,
+            clock: Cell::new(0),
+            oam: [const { Cell::new(0) }; 160],
+        }
+    }
+
+    // Will be useful for the rendering passes
     fn object(&self, index: usize) -> ObjectAttribute {
         let base = index * 4;
         ObjectAttribute(u32::from_le_bytes([
@@ -138,12 +148,16 @@ impl Ppu {
 impl MemoryHandler for Ppu {
     fn read(&self, _mmu: &Mmu, address: u16) -> MemoryRead {
         match address {
+            0xFE00..=0xFE9F => MemoryRead::Replace(self.oam[(address & 0xFF) as usize].get()),
             _ => MemoryRead::Replace(self.registers.borrow().read(address)),
         }
     }
 
     fn write(&self, _mmu: &Mmu, address: u16, value: u8) -> MemoryWrite {
-        self.registers.borrow_mut().write(address, value);
+        match address {
+            0xFE00..=0xFE9F => self.oam[(address & 0xFF) as usize].set(value),
+            _ => self.registers.borrow_mut().write(address, value),
+        };
         MemoryWrite::Block
     }
 }
@@ -152,6 +166,5 @@ impl Clocked for Ppu {
     fn step(&self, elapsed_cycles: u16) {
         self.clock
             .set(self.clock.get().wrapping_add(elapsed_cycles));
-        todo!()
     }
 }

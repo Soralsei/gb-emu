@@ -5,7 +5,7 @@ use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
 use crate::clock::{Clock, M_CYCLE};
 use crate::cpu::instructions::Cycles;
-use crate::memory::mmu::Mmu;
+use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
 
 pub struct Imm8;
@@ -81,7 +81,7 @@ impl Src<u8> for Mem<Reg16> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let Mem(reg) = self;
         let addr = reg.read(cpu);
-        cpu.mmu.read(addr)
+        cpu.bus.read(addr)
     }
 }
 
@@ -90,7 +90,7 @@ impl Src<u8> for Mem<Imm16> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let Mem(imm) = self;
         let addr = imm.read(cpu);
-        cpu.mmu.read(addr)
+        cpu.bus.read(addr)
     }
 }
 
@@ -99,7 +99,7 @@ impl Dst<u8> for Mem<Reg16> {
     fn write(self, cpu: &mut Cpu, val: u8) {
         let Mem(reg) = self;
         let addr = reg.read(cpu);
-        cpu.mmu.write(addr, val);
+        cpu.bus.write(addr, val);
     }
 }
 
@@ -109,8 +109,8 @@ impl Dst<u16> for Mem<Imm16> {
         let Mem(loc) = self;
         let addr = loc.read(cpu);
         let (msb, lsb) = word_to_bytes(val);
-        cpu.mmu.write(addr, lsb);
-        cpu.mmu.write(addr + 1, msb);
+        cpu.bus.write(addr, lsb);
+        cpu.bus.write(addr + 1, msb);
     }
 }
 
@@ -120,7 +120,7 @@ impl Dst<u8> for Mem<Imm16> {
         let Mem(loc) = self;
 
         let addr = loc.read(cpu);
-        cpu.mmu.write(addr, value);
+        cpu.bus.write(addr, value);
     }
 }
 
@@ -129,7 +129,7 @@ impl Src<u8> for DMem<Reg8> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let DMem(reg) = self;
         let addr = reg.read(cpu) as u16;
-        cpu.mmu.read(0xFF00 + addr)
+        cpu.bus.read(0xFF00 + addr)
     }
 }
 
@@ -138,7 +138,7 @@ impl Src<u8> for DMem<Imm8> {
     fn read(self, cpu: &mut Cpu) -> u8 {
         let DMem(imm) = self;
         let addr = imm.read(cpu) as u16;
-        cpu.mmu.read(0xFF00 + addr)
+        cpu.bus.read(0xFF00 + addr)
     }
 }
 
@@ -147,7 +147,7 @@ impl Dst<u8> for DMem<Reg8> {
     fn write(self, cpu: &mut Cpu, value: u8) {
         let DMem(reg) = self;
         let addr = reg.read(cpu) as u16;
-        cpu.mmu.write(0xFF00 + addr, value);
+        cpu.bus.write(0xFF00 + addr, value);
     }
 }
 
@@ -156,7 +156,7 @@ impl Dst<u8> for DMem<Imm8> {
     fn write(self, cpu: &mut Cpu, value: u8) {
         let DMem(imm) = self;
         let addr = imm.read(cpu) as u16;
-        cpu.mmu.write(0xFF00 + addr, value);
+        cpu.bus.write(0xFF00 + addr, value);
     }
 }
 
@@ -170,28 +170,27 @@ enum Mode {
     Halted,
     /// STOP with a speed switch armed: the CPU is inert for a fixed span and
     /// DIV is frozen, but the PPU keeps running.
-    SwitchPause {
+    SwitchStalled {
         remaining: u16,
     },
     /// STOP with no switch armed: only a joypad press resumes.
     Stopped,
 }
 
-#[allow(unused)]
 pub struct Cpu {
     pub registers: Registers,
-    mmu: Mmu,
+    bus: CpuBus,
     ime: bool,
     clock: Rc<Clock>,
     mode: Mode,
 }
 
 impl Cpu {
-    pub fn new(mmu: Mmu, clock: Rc<Clock>, is_cgb: bool) -> Cpu {
+    pub fn new(bus: CpuBus, clock: Rc<Clock>, is_cgb: bool) -> Cpu {
         Cpu {
             registers: Registers::new(is_cgb),
+            bus,
             ime: true,
-            mmu,
             clock,
             mode: Mode::Running,
         }
@@ -199,6 +198,12 @@ impl Cpu {
 
     pub fn halt(&mut self) {
         self.mode = Mode::Halted;
+    }
+
+    /// In STOP mode no time passes, so a caller driving the machine by a cycle
+    /// budget has to stop asking rather than wait for cycles that never come.
+    pub fn is_stopped(&self) -> bool {
+        self.mode == Mode::Stopped
     }
 
     /// Tick the cycles this unit of work needs on top of the ones its bus
@@ -215,7 +220,7 @@ impl Cpu {
         match self.mode {
             // DIV is frozen for the duration, so this cannot go through
             // `spend`: only the fixed-rate devices advance.
-            Mode::SwitchPause { remaining } => {
+            Mode::SwitchStalled { remaining } => {
                 let step = M_CYCLE.min(remaining);
                 self.clock.tick_fixed(step);
                 // `spend` tops up against `elapsed`, so the next instruction
@@ -223,14 +228,19 @@ impl Cpu {
                 self.clock.reset();
                 self.mode = match remaining - step {
                     0 => Mode::Running,
-                    left => Mode::SwitchPause { remaining: left },
+                    left => Mode::SwitchStalled { remaining: left },
                 };
                 return step as usize;
             }
-            Mode::Halted | Mode::Stopped => {
+            // The CPU is inert but the clock keeps running, so a halt still
+            // costs time and lets the devices that wake it advance.
+            Mode::Halted => {
                 self.spend(M_CYCLE as usize);
                 return M_CYCLE as usize;
             }
+            // STOP mode stops the main clock: no device advances and no time
+            // passes. Only a joypad press leaves it, via `resume`.
+            Mode::Stopped => return 0,
             Mode::Running => (),
         }
 
@@ -265,7 +275,7 @@ impl Cpu {
         match self.mode {
             // Neither form of STOP is left by an interrupt: the pause runs to
             // its own end, and STOP mode waits on the joypad.
-            Mode::Stopped | Mode::SwitchPause { .. } => return 0,
+            Mode::Stopped | Mode::SwitchStalled { .. } => return 0,
             // TODO: implement halt bug
             Mode::Halted => {
                 if let Some(_) = interrupt_controller.peek() {
@@ -305,7 +315,7 @@ impl Cpu {
     pub fn fetch_u8(&mut self) -> u8 {
         let pc = self.registers.pc;
         self.registers.pc = pc.wrapping_add(1);
-        self.mmu.read(pc)
+        self.bus.read(pc)
     }
 
     #[inline(always)]
@@ -319,7 +329,7 @@ impl Cpu {
     pub fn push_u8(&mut self, value: u8) {
         let new_sp = self.registers.sp.wrapping_sub(1);
         self.registers.sp = new_sp;
-        self.mmu.write(new_sp, value);
+        self.bus.write(new_sp, value);
     }
 
     #[inline(always)]
@@ -334,7 +344,7 @@ impl Cpu {
     pub fn pop_u8(&mut self) -> u8 {
         let sp = self.registers.sp;
         self.registers.sp = sp.wrapping_add(1);
-        self.mmu.read(sp)
+        self.bus.read(sp)
     }
 
     #[inline(always)]
@@ -346,8 +356,8 @@ impl Cpu {
 
     pub fn stop(&mut self) {
         eprintln!("Hit a stop instruction");
-        let interrupt_pending = self.mmu.peek(0xFFFF) & self.mmu.peek(0xFF0F) & 0x1F;
-        let joyp = self.mmu.peek(0xFF00) & 0x0F;
+        let interrupt_pending = self.bus.peek(0xFFFF) & self.bus.peek(0xFF0F) & 0x1F;
+        let joyp = self.bus.peek(0xFF00) & 0x0F;
 
         // If a button is being held on a selected line in JOYP
         if joyp != 0x0F {
@@ -374,7 +384,7 @@ impl Cpu {
             // The CPU sits out the next 2050 M-cycles. Modelling it as a mode
             // rather than one burst of cycles keeps the PPU advancing through
             // the pause while DIV stays frozen.
-            self.mode = Mode::SwitchPause {
+            self.mode = Mode::SwitchStalled {
                 remaining: 2050 * M_CYCLE,
             };
             return;

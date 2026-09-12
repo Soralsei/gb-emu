@@ -164,7 +164,7 @@ impl Mbc1 {
         } else {
             0
         };
-        Some((bank * RAM_BANK_SIZE | offset) % self.ram_mask)
+        Some((bank * RAM_BANK_SIZE | offset) & self.ram_mask)
     }
 
     fn maybe_one_bank(bank_number: u8) -> u8 {

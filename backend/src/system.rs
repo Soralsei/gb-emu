@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::clock::Clock;
+use crate::graphics::oam::DMAController;
+use crate::graphics::ppu::Ppu;
 use crate::input::{Button, JoypadHandler};
+use crate::memory::bus::{BusController, CpuBus};
 use crate::memory::mmu::{MemoryRead, MemoryWrite};
 use crate::{SCREEN_H, SCREEN_W};
 
@@ -66,11 +69,24 @@ impl System {
         let timer = Rc::new(Timer::new(interrupt_controller.request(), is_cgb));
         let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
 
-        let mut mmu = Mmu::new(clock.clone());
+        // The bus is shared: the CPU drives it, and clocked devices that move
+        // bytes themselves (OAM DMA, the PPU fetcher) need a handle to it too.
+        let mmu = Rc::new(Mmu::new());
+        let bus_controller = Rc::new(BusController::new());
+
+        let cpu = Cpu::new(
+            CpuBus::new(mmu.clone(), bus_controller.clone(), clock.clone()),
+            clock.clone(),
+            is_cgb,
+        );
+        let ppu = Rc::new(Ppu::new(interrupt_controller.request()));
+        let dma = Rc::new(DMAController::new(mmu.clone(), bus_controller.clone()));
 
         clock.attach(timer.clone());
         clock.attach(serial.clone());
-        //clock.attach_fixed(ppu.clone())
+        clock.attach(dma.clone());
+
+        clock.attach_fixed(ppu.clone());
         //clock.attach_fixed(apu.clone())
 
         #[cfg(feature = "blaarg")]
@@ -82,6 +98,15 @@ impl System {
         mmu.add_handler((0x0000, 0x7FFF), mbc.clone());
         mmu.add_handler((0xFF50, 0xFF50), mbc.clone());
         mmu.add_handler((0xA000, 0xBFFF), mbc.clone());
+
+        // OAM
+        mmu.add_handler((0xFE00, 0xFE9F), ppu.clone());
+        // Ppu registers other than OAM DMA
+        mmu.add_handler((0xFF40, 0xFF45), ppu.clone());
+        // OAM DMA register
+        mmu.add_handler((0xFF46, 0xFF46), dma.clone());
+        // Ppu rest of registers
+        mmu.add_handler((0xFF47, 0xFF4B), ppu.clone());
 
         mmu.add_handler((0xFF00, 0xFF00), joypad.clone());
 
@@ -100,7 +125,6 @@ impl System {
         }
         mmu.add_handler((0xFFFF, 0xFFFF), interrupt_controller.clone());
 
-        let cpu = Cpu::new(mmu, clock.clone(), is_cgb);
         Self {
             cpu,
             clock,
@@ -121,6 +145,11 @@ impl System {
         let mut cycle_budget = CYCLES_PER_FRAME * 2;
         loop {
             cycle_budget = cycle_budget.saturating_sub(self.step() as u32);
+            // STOP mode burns no cycles, so the budget would never drain. Hand
+            // the frame back so the frontend can poll the joypad that ends it.
+            if self.cpu.is_stopped() {
+                break;
+            }
             // if self.ppu.borrow().framebuffer() || cycle_budget == 0 {
             if cycle_budget == 0 {
                 break;

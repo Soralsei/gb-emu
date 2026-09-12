@@ -1,6 +1,8 @@
-use std::{collections::BTreeMap, rc::Rc};
-
-use crate::clock::{Clock, M_CYCLE};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::Rc,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRead {
@@ -25,43 +27,42 @@ pub trait MemoryHandler {
 
 #[allow(unused)]
 pub struct Mmu {
-    pub handlers: BTreeMap<u16, Vec<Rc<dyn MemoryHandler>>>,
-    clock: Rc<Clock>,
-    memory: [u8; 0x10000],
+    handlers: RefCell<BTreeMap<u16, Vec<Rc<dyn MemoryHandler>>>>,
+    /// `Cell<u8>` is `repr(transparent)`, so this has the layout and access cost
+    /// of `[u8; 0x10000]`. Interior mutability is what lets the bus be shared as
+    /// an `Rc<Mmu>`: a clocked device (OAM DMA, the PPU fetcher) only ever holds
+    /// `&Mmu`, and still has to be able to drive a write.
+    memory: [Cell<u8>; 0x10000],
     pub interrupts_enable: u8,
     pub interrupts_flags: u8,
 }
 
 impl Mmu {
-    pub fn new(clock: Rc<Clock>) -> Mmu {
+    pub fn new() -> Mmu {
         Mmu {
-            handlers: BTreeMap::new(),
-            clock,
-            memory: [0; 0x10000],
+            handlers: RefCell::new(BTreeMap::new()),
+            memory: [const { Cell::new(0) }; 0x10000],
             interrupts_enable: 0,
             interrupts_flags: 0,
         }
     }
 
-    pub fn add_handler(&mut self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
+    /// Takes `&self` so devices can be registered after the bus is behind an
+    /// `Rc`, which they have to be when a device needs a handle to the bus.
+    pub fn add_handler(&self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
+        let mut handlers = self.handlers.borrow_mut();
         for address in address_range.0..=address_range.1 {
-            self.handlers
-                .entry(address)
-                .or_default()
-                .push(handler.clone());
+            handlers.entry(address).or_default().push(handler.clone());
         }
     }
 
-    /// Bus read, as performed by the CPU: costs a machine cycle.
-    pub fn read(&self, addr: u16) -> u8 {
-        self.clock.tick(M_CYCLE);
-        self.peek(addr)
-    }
-
-    /// Observe memory without advancing the clock. For handlers and debug
-    /// tooling, which are not the CPU driving the bus.
+    /// Read a byte. The address map only: no machine cycle, no arbitration.
+    /// The CPU reaches memory through `CpuBus`, which adds both.
     pub fn peek(&self, addr: u16) -> u8 {
-        if let Some(handlers) = self.handlers.get(&addr) {
+        // Cloned out of the map so the borrow ends before a handler runs: a
+        // handler is free to come back through `peek` (the blaarg spy does).
+        let handlers = self.handlers.borrow().get(&addr).cloned();
+        if let Some(handlers) = handlers {
             for handler in handlers {
                 match handler.read(self, addr) {
                     MemoryRead::Replace(value) => return value,
@@ -72,21 +73,20 @@ impl Mmu {
 
         match addr {
             // echo ram read
-            0xE000..=0xFDFF => self.memory[(addr - 0x2000) as usize],
+            0xE000..=0xFDFF => self.memory[(addr - 0x2000) as usize].get(),
             // normal ram read
-            _ => self.memory[addr as usize],
+            _ => self.memory[addr as usize].get(),
         }
     }
 
-    /// Write memory without advancing the clock. For handlers and debug
-    /// tooling, which are not the CPU driving the bus
-    pub fn poke(&mut self, addr: u16, value: u8) {
-        // Resolve the handler chain first: handlers only ever see `&Mmu`, so the
-        // backing store is written after their borrow of `self` has ended.
-        let outcome = match self.handlers.get(&addr) {
+    /// Write a byte. The address map only: no machine cycle, no arbitration.
+    /// This is the path a clocked device uses to drive the bus it owns.
+    pub fn poke(&self, addr: u16, value: u8) {
+        let handlers = self.handlers.borrow().get(&addr).cloned();
+        let outcome = match handlers {
             Some(handlers) => {
                 let mut outcome = MemoryWrite::Pass;
-                for handler in handlers {
+                for handler in &handlers {
                     match handler.write(self, addr, value) {
                         MemoryWrite::Pass => (),
                         decided => {
@@ -108,15 +108,9 @@ impl Mmu {
 
         match addr {
             // echo ram write
-            0xE000..=0xFDFF => self.memory[(addr - 0x2000) as usize] = value,
+            0xE000..=0xFDFF => self.memory[(addr - 0x2000) as usize].set(value),
             // normal ram write
-            _ => self.memory[addr as usize] = value,
+            _ => self.memory[addr as usize].set(value),
         }
-    }
-
-    /// Bus write, as performed by the CPU: costs a machine cycle.
-    pub fn write(&mut self, addr: u16, value: u8) {
-        self.clock.tick(M_CYCLE);
-        self.poke(addr, value);
     }
 }
