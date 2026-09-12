@@ -2,7 +2,6 @@
 #![allow(unused)]
 use std::io::stdin;
 use std::ops::{Shl, Shr};
-use std::ptr::null;
 
 use super::cpu::{self, Cpu, DMem, Dst, Imm16, Imm8, Mem, Src};
 use super::operations::*;
