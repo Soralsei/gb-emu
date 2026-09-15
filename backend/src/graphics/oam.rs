@@ -71,7 +71,7 @@ impl MemoryHandler for DMAController {
 impl Clocked for DMAController {
     fn step(&self, elapsed: u16) {
         match self.oam_transfer_state.get() {
-            OAMTransferState::Idle => return,
+            OAMTransferState::Idle => (),
             OAMTransferState::InProgress => {
                 for _ in 0..(elapsed / M_CYCLE) {
                     let src_addr: u16 =

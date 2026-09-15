@@ -327,7 +327,7 @@ pub fn sbc<D: Dst<u8> + Src<u8> + Copy, S: Src<u8>>(cpu: &mut Cpu, dest: D, src:
     let c = cpu.registers.f.carry as u8;
     let (result, carry) = a.overflowing_sub(b);
     let (result, carry_c) = result.overflowing_sub(c);
-    dest.write(cpu, result as u8);
+    dest.write(cpu, result);
 
     cpu.registers.f.zero = result == 0;
     cpu.registers.f.subtract = true;
@@ -483,7 +483,7 @@ pub fn srl<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
 
 pub fn swap<L: Dst<u8> + Src<u8> + Copy>(cpu: &mut Cpu, loc: L) -> Timing {
     let value = loc.read(cpu);
-    let result = (value << 4) | (value >> 4);
+    let result = value.rotate_right(4);
     loc.write(cpu, result);
 
     cpu.registers.f.zero = result == 0;

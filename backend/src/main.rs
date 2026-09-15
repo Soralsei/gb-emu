@@ -10,10 +10,7 @@ fn main() {
     let mut boot_rom = None;
     if args.len() > 2 {
         let f_boot_rom = std::fs::read(&args[2]);
-        boot_rom = match f_boot_rom {
-            Ok(br) => Some(br),
-            Err(_) => None,
-        };
+        boot_rom = f_boot_rom.ok();
     }
     let mut sys = System::new(boot_rom, rom, false);
     loop {

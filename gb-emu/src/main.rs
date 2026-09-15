@@ -42,7 +42,7 @@ fn main() {
             sys.set_button(b, win.is_key_down(k));
         }
         sys.run_frame();
-        for (px, &i) in buf.iter_mut().zip(sys.get_framebuffer()) {
+        for (px, &i) in buf.iter_mut().zip(sys.get_framebuffer().iter()) {
             *px = DMG[(i & 3) as usize];
         }
         win.update_with_buffer(&buf, SCREEN_W, SCREEN_H).unwrap();

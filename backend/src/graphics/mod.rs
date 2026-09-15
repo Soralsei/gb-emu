@@ -1,4 +1,6 @@
+mod fifo;
 pub mod oam;
+mod object_attributes;
 pub mod ppu;
 mod registers;
 

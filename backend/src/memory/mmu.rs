@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
     rc::Rc,
 };
 
@@ -27,7 +26,9 @@ pub trait MemoryHandler {
 
 #[allow(unused)]
 pub struct Mmu {
-    handlers: RefCell<BTreeMap<u16, Vec<Rc<dyn MemoryHandler>>>>,
+    /// Indexed by address rather than keyed by it. The map is dense, so a tree
+    /// walk per access buys nothing over an indexed load. Costs 1.5MB.
+    handlers: RefCell<Box<[Vec<Rc<dyn MemoryHandler>>]>>,
     /// `Cell<u8>` is `repr(transparent)`, so this has the layout and access cost
     /// of `[u8; 0x10000]`. Interior mutability is what lets the bus be shared as
     /// an `Rc<Mmu>`: a clocked device (OAM DMA, the PPU fetcher) only ever holds
@@ -40,7 +41,12 @@ pub struct Mmu {
 impl Mmu {
     pub fn new() -> Mmu {
         Mmu {
-            handlers: RefCell::new(BTreeMap::new()),
+            handlers: RefCell::new(
+                (0..0x10000)
+                    .map(|_| Vec::with_capacity(2))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
             memory: [const { Cell::new(0) }; 0x10000],
             interrupts_enable: 0,
             interrupts_flags: 0,
@@ -52,22 +58,21 @@ impl Mmu {
     pub fn add_handler(&self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
         let mut handlers = self.handlers.borrow_mut();
         for address in address_range.0..=address_range.1 {
-            handlers.entry(address).or_default().push(handler.clone());
+            handlers[address as usize].push(handler.clone());
         }
     }
 
     /// Read a byte. The address map only: no machine cycle, no arbitration.
     /// The CPU reaches memory through `CpuBus`, which adds both.
     pub fn peek(&self, addr: u16) -> u8 {
-        // Cloned out of the map so the borrow ends before a handler runs: a
-        // handler is free to come back through `peek` (the blaarg spy does).
-        let handlers = self.handlers.borrow().get(&addr).cloned();
-        if let Some(handlers) = handlers {
-            for handler in handlers {
-                match handler.read(self, addr) {
-                    MemoryRead::Replace(value) => return value,
-                    MemoryRead::Pass => (),
-                }
+        // Held while handlers run: one may come back through `peek` (the blaarg
+        // spy does), and nested shared borrows are fine. Mutating the table from
+        // inside dispatch is not — see `add_handler`.
+        let handlers = self.handlers.borrow();
+        for handler in handlers[addr as usize].iter() {
+            match handler.read(self, addr) {
+                MemoryRead::Replace(value) => return value,
+                MemoryRead::Pass => (),
             }
         }
 
@@ -82,22 +87,19 @@ impl Mmu {
     /// Write a byte. The address map only: no machine cycle, no arbitration.
     /// This is the path a clocked device uses to drive the bus it owns.
     pub fn poke(&self, addr: u16, value: u8) {
-        let handlers = self.handlers.borrow().get(&addr).cloned();
-        let outcome = match handlers {
-            Some(handlers) => {
-                let mut outcome = MemoryWrite::Pass;
-                for handler in &handlers {
-                    match handler.write(self, addr, value) {
-                        MemoryWrite::Pass => (),
-                        decided => {
-                            outcome = decided;
-                            break;
-                        }
+        let outcome = {
+            let handlers = self.handlers.borrow();
+            let mut outcome = MemoryWrite::Pass;
+            for handler in handlers[addr as usize].iter() {
+                match handler.write(self, addr, value) {
+                    MemoryWrite::Pass => (),
+                    decided => {
+                        outcome = decided;
+                        break;
                     }
                 }
-                outcome
             }
-            None => MemoryWrite::Pass,
+            outcome
         };
 
         let value = match outcome {

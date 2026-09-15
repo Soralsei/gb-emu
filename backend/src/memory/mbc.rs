@@ -164,7 +164,7 @@ impl Mbc1 {
         } else {
             0
         };
-        Some((bank * RAM_BANK_SIZE | offset) & self.ram_mask)
+        Some(((bank * RAM_BANK_SIZE) | offset) & self.ram_mask)
     }
 
     fn maybe_one_bank(bank_number: u8) -> u8 {
@@ -188,7 +188,7 @@ impl Mbc1 {
         let num_bits = addressing_number_of_bits(num_banks);
         // Should never occur, but just to be safe
         // avoids overflow
-        let usize_bits = size_of::<usize>() * 8;
+        let usize_bits = usize::BITS as usize;
         if (num_bits >= usize_bits) {
             return !0usize;
         }
@@ -210,7 +210,7 @@ impl MemoryBank for Mbc1 {
                     0
                 } as usize;
                 // bits 20 and 19 => bank_number, bits 18-14 => 0, bits 13-0 => address <= 0x3FFF
-                let bank_addr: usize = bank_number * ROM_BANK_SIZE | (address as usize);
+                let bank_addr: usize = (bank_number * ROM_BANK_SIZE) | (address as usize);
                 MemoryRead::Replace(self.rom[bank_addr])
             }
             0x4000..=0x7FFF => {
@@ -225,8 +225,8 @@ impl MemoryBank for Mbc1 {
                 let mut bank_number = bank2_number | corrected_bank1;
                 // Get the address inside the selected bank
                 // strictly equivalent to bank_number * ROM_BANK_SIZE + (address - 0x4000)
-                let bank_addr: usize =
-                    bank_number as usize * ROM_BANK_SIZE | (address as usize & (ROM_BANK_SIZE - 1));
+                let bank_addr: usize = (bank_number as usize * ROM_BANK_SIZE)
+                    | (address as usize & (ROM_BANK_SIZE - 1));
 
                 MemoryRead::Replace(self.rom[bank_addr])
             }
@@ -258,7 +258,7 @@ impl MemoryBank for Mbc1 {
             }
             0x4000..=0x5FFF => {
                 self.ram_bank_number = value & 0b11;
-                return MemoryWrite::Block;
+                MemoryWrite::Block
             }
             0x6000..=0x7FFF => {
                 self.advanced_mode = value & 0b1 != 0;
@@ -371,7 +371,7 @@ impl Mbc {
         match boot_rom {
             Some(boot_rom) => Self {
                 cart,
-                boot_rom: boot_rom,
+                boot_rom,
                 boot_rom_enabled: Cell::new(true),
             },
             None => Self {
@@ -388,7 +388,7 @@ impl Mbc {
 
     #[inline]
     fn in_boot_rom(&self, address: u16) -> bool {
-        address < 0x100 || (self.boot_rom.len() == 0x900 && address >= 0x200 && address < 0x900)
+        address < 0x100 || (self.boot_rom.len() == 0x900 && (0x200..0x900).contains(&address))
     }
 }
 

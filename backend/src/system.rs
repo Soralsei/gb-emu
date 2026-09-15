@@ -1,12 +1,12 @@
+use std::cell::Ref;
 use std::rc::Rc;
 
-use crate::clock::Clock;
+use crate::clock::{Clock, Domain};
 use crate::graphics::oam::DMAController;
-use crate::graphics::ppu::Ppu;
+use crate::graphics::ppu::{Frame, Ppu};
 use crate::input::{Button, JoypadHandler};
 use crate::memory::bus::{BusController, CpuBus};
 use crate::memory::mmu::{MemoryRead, MemoryWrite};
-use crate::{SCREEN_H, SCREEN_W};
 
 use super::memory::mbc::Mbc;
 use super::memory::mmu::MemoryHandler;
@@ -51,10 +51,10 @@ impl MemoryHandler for Unmapped {
 
 pub struct System {
     cpu: Cpu,
+    ppu: Rc<Ppu>,
     clock: Rc<Clock>,
     interrupt_controller: Rc<InterruptController>,
     joypad: Rc<JoypadHandler>,
-    current_frame: Box<[u8; SCREEN_W * SCREEN_H]>,
 }
 
 impl System {
@@ -66,7 +66,11 @@ impl System {
 
         let interrupt_controller = Rc::new(InterruptController::new());
         let serial = Rc::new(Serial::new(interrupt_controller.request()));
-        let timer = Rc::new(Timer::new(interrupt_controller.request(), is_cgb));
+        let timer = Rc::new(Timer::new(
+            interrupt_controller.request(),
+            clock.clone(),
+            is_cgb,
+        ));
         let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
 
         // The bus is shared: the CPU drives it, and clocked devices that move
@@ -86,8 +90,7 @@ impl System {
         clock.attach(serial.clone());
         clock.attach(dma.clone());
 
-        clock.attach_fixed(ppu.clone());
-        //clock.attach_fixed(apu.clone())
+        clock.spawn(Domain::Fixed, |timeline| Ppu::task(ppu.clone(), timeline));
 
         #[cfg(feature = "blaarg")]
         {
@@ -99,6 +102,8 @@ impl System {
         mmu.add_handler((0xFF50, 0xFF50), mbc.clone());
         mmu.add_handler((0xA000, 0xBFFF), mbc.clone());
 
+        // PPU VRAM
+        mmu.add_handler((0x8000, 0x9FFF), ppu.clone());
         // OAM
         mmu.add_handler((0xFE00, 0xFE9F), ppu.clone());
         // Ppu registers other than OAM DMA
@@ -127,10 +132,10 @@ impl System {
 
         Self {
             cpu,
+            ppu,
             clock,
             interrupt_controller,
             joypad,
-            current_frame: Box::new([0; SCREEN_W * SCREEN_H]),
         }
     }
 
@@ -141,30 +146,26 @@ impl System {
     }
 
     pub fn run_frame(&mut self) {
-        static mut COUNTER: usize = 0;
         let mut cycle_budget = CYCLES_PER_FRAME * 2;
         loop {
             cycle_budget = cycle_budget.saturating_sub(self.step() as u32);
             // STOP mode burns no cycles, so the budget would never drain. Hand
             // the frame back so the frontend can poll the joypad that ends it.
-            if self.cpu.is_stopped() {
+            if self.cpu.is_stopped() || self.ppu.take_frame_ready() || cycle_budget == 0 {
                 break;
             }
-            // if self.ppu.borrow().framebuffer() || cycle_budget == 0 {
-            if cycle_budget == 0 {
-                break;
-            }
-        }
-        // self.current_frame
-        // .copy_from_slice(self.ppu.borrow().framebuffer());
-        unsafe {
-            render_test_pattern(&mut self.current_frame[..], SCREEN_W, COUNTER);
-            COUNTER += 1;
         }
     }
 
-    pub fn get_framebuffer(&self) -> &[u8] {
-        &self.current_frame[..]
+    pub fn get_framebuffer(&self) -> Ref<'_, Frame> {
+        // static mut COUNTER: usize = 0;
+        // static mut FRAMEBUFFER: [u8; SCREEN_W * SCREEN_H] = [0u8; SCREEN_W * SCREEN_H];
+        // unsafe {
+        //     render_test_pattern(&mut FRAMEBUFFER, SCREEN_W, COUNTER);
+        //     COUNTER += 1;
+        //     &FRAMEBUFFER
+        // }
+        self.ppu.framebuffer()
     }
 
     pub fn set_button(&mut self, btn: Button, down: bool) {

@@ -48,7 +48,7 @@ impl std::convert::From<u8> for Interrupts {
 impl std::convert::From<&Interrupts> for u8 {
     fn from(value: &Interrupts) -> Self {
         let mut res = 0;
-        res |= (value.vblank.get() as u8) << 0;
+        res |= value.vblank.get() as u8;
         res |= (value.lcd.get() as u8) << 1;
         res |= (value.timer.get() as u8) << 2;
         res |= (value.serial.get() as u8) << 3;

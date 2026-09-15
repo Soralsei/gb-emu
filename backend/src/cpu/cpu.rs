@@ -278,7 +278,7 @@ impl Cpu {
             Mode::Stopped | Mode::SwitchStalled { .. } => return 0,
             // TODO: implement halt bug
             Mode::Halted => {
-                if let Some(_) = interrupt_controller.peek() {
+                if interrupt_controller.peek().is_some() {
                     self.mode = Mode::Running;
                 }
             }

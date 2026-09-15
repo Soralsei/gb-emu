@@ -32,6 +32,15 @@ pub enum ObjSize {
     Size8x16 = 1,
 }
 
+impl ObjSize {
+    pub fn as_height(&self) -> u8 {
+        match self {
+            ObjSize::Size8x8 => 8,
+            ObjSize::Size8x16 => 16,
+        }
+    }
+}
+
 impl From<ObjSize> for u8 {
     fn from(value: ObjSize) -> Self {
         value as u8
@@ -148,7 +157,7 @@ impl LcdStat {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PpuRegisters {
     lcdc: LcdControl,
     ly: u8,
@@ -161,6 +170,7 @@ pub struct PpuRegisters {
     bgp: u8,
     obp0: u8,
     obp1: u8,
+    vram_bank: u8,
 }
 
 impl PpuRegisters {
@@ -182,6 +192,7 @@ impl PpuRegisters {
             0xFF49 => self.obp1,
             0xFF4A => self.wy,
             0xFF4B => self.wx,
+            0xFF4F => self.vram_bank,
             _ => unreachable!("Ppu register at address 0x{:04X} does not exist", address),
         }
     }
@@ -206,6 +217,7 @@ impl PpuRegisters {
             0xFF49 => self.obp1 = value,
             0xFF4A => self.wy = value,
             0xFF4B => self.wx = value,
+            0xFF4F => self.vram_bank = value,
             // the actual OAM transfer is started by the Ppu memory handler
             _ => unreachable!("Ppu register at address 0x{:04X} does not exist", address),
         }
@@ -227,5 +239,29 @@ impl PpuRegisters {
 
     pub fn stat(&self) -> LcdStat {
         self.stat
+    }
+
+    pub fn ly(&self) -> u8 {
+        self.ly
+    }
+
+    pub fn scx(&self) -> u8 {
+        self.scx
+    }
+
+    pub fn scy(&self) -> u8 {
+        self.scy
+    }
+
+    pub fn wx(&self) -> u8 {
+        self.wx
+    }
+
+    pub fn wy(&self) -> u8 {
+        self.wy
+    }
+
+    pub fn vram_bank(&self) -> u8 {
+        self.vram_bank
     }
 }

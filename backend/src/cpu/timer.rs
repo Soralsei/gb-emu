@@ -1,8 +1,8 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 use super::interrupt::InterruptRequest;
 use crate::{
-    clock::{Clocked, M_CYCLE},
+    clock::{Clock, Clocked, M_CYCLE},
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
 };
@@ -17,11 +17,11 @@ pub struct Timer {
 }
 
 impl Timer {
-    pub fn new(interrupt_request: InterruptRequest, is_cgb: bool) -> Self {
+    pub fn new(interrupt_request: InterruptRequest, clock: Rc<Clock>, is_cgb: bool) -> Self {
         Self {
             state: RefCell::new(TimerState {
+                clock,
                 interrupt_request,
-                counter: 0,
                 tima: 0,
                 tma: 0,
                 tac: 0,
@@ -33,34 +33,46 @@ impl Timer {
 }
 
 struct TimerState {
+    clock: Rc<Clock>,
     interrupt_request: InterruptRequest,
-    counter: u16, // DIV register is its high byte
-    tima: u8,     // address 0xFF05
-    tma: u8,      // address 0xFF06
-    tac: u8,      // address 0xFF07
+    tima: u8, // address 0xFF05
+    tma: u8,  // address 0xFF06
+    tac: u8,  // address 0xFF07
     overflowed: bool,
     is_cgb: bool,
 }
 
 impl TimerState {
-    fn timer_enabled(&self) -> bool {
-        is_bit_set!(self.tac, TAC_ENABLE)
+    fn enabled(tac: u8) -> bool {
+        is_bit_set!(tac, TAC_ENABLE)
     }
 
-    fn is_selected_clock_bit_set(&self) -> bool {
-        let bit = TIMA_PERIODS[(self.tac & 0b11) as usize] >> 1;
-        self.counter & bit != 0
+    fn selected_bit(counter: u16, tac: u8) -> bool {
+        counter & (TIMA_PERIODS[(tac & 0b11) as usize] >> 1) != 0
     }
 
-    fn state_change(&mut self, counter: u16, tac: u8) {
-        let previous_active = self.timer_enabled();
-        let previous_selected_set = self.is_selected_clock_bit_set();
+    /// One M-cycle of counter advance: the pending TMA reload, then a falling
+    /// edge of the selected bit between `counter - M_CYCLE` and `counter`.
+    fn advance_to(&mut self, counter: u16) {
+        if self.overflowed {
+            self.tima = self.tma;
+            self.overflowed = false;
+            self.interrupt_request.timer(true);
+        }
+        self.state_change(counter.wrapping_sub(M_CYCLE), counter, self.tac);
+    }
 
-        self.counter = counter;
-        self.tac = tac;
+    /// Sample the selected bit either side of a change to the counter or TAC.
+    /// The counter is passed in rather than read twice from the clock: a write
+    /// changes it under the detector, so both samples must be explicit.
+    fn state_change(&mut self, previous_counter: u16, next_counter: u16, next_tac: u8) {
+        let previous_active = Self::enabled(self.tac);
+        let previous_selected_set = Self::selected_bit(previous_counter, self.tac);
 
-        let current_active = self.timer_enabled();
-        let current_selected_set = self.is_selected_clock_bit_set();
+        self.tac = next_tac;
+
+        let current_active = Self::enabled(self.tac);
+        let current_selected_set = Self::selected_bit(next_counter, self.tac);
 
         // Changing which bit of the system counter is selected (by changing the “Clock select”
         // bits of TAC) from a bit currently set to another that is currently unset, will send
@@ -102,18 +114,22 @@ impl MemoryHandler for Timer {
 
 impl Clocked for Timer {
     fn step(&self, elapsed_cycles: u16) {
-        self.state.borrow_mut().step(elapsed_cycles);
-    }
-
-    fn reset_div(&self) {
-        self.state.borrow_mut().counter = 0;
+        let mut state = self.state.borrow_mut();
+        // The window this tick covers, derived rather than stored: a stored
+        // previous sample would go stale on a DIV reset, which is the
+        // notification the clock no longer broadcasts.
+        let end = state.clock.div();
+        let start = end.wrapping_sub(elapsed_cycles);
+        for k in (M_CYCLE..=elapsed_cycles).step_by(M_CYCLE as usize) {
+            state.advance_to(start.wrapping_add(k));
+        }
     }
 }
 
 impl TimerState {
     fn read(&self, address: u16) -> MemoryRead {
         match address {
-            0xFF04 => MemoryRead::Replace((self.counter >> 8) as u8),
+            0xFF04 => MemoryRead::Replace((self.clock.div() >> 8) as u8),
             0xFF05 => MemoryRead::Replace(self.tima),
             0xFF06 => MemoryRead::Replace(self.tma),
             0xFF07 => MemoryRead::Replace(self.tac),
@@ -124,7 +140,9 @@ impl TimerState {
     fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
         match address {
             0xFF04 => {
-                self.state_change(0, self.tac);
+                let previous = self.clock.div();
+                self.clock.reset_div();
+                self.state_change(previous, 0, self.tac);
                 return MemoryWrite::Block;
             }
             0xFF05 => {
@@ -133,21 +151,11 @@ impl TimerState {
             }
             0xFF06 => self.tma = value,
             0xFF07 => {
-                self.state_change(self.counter, value & 0b111);
+                let counter = self.clock.div();
+                self.state_change(counter, counter, value & 0b111);
             }
             _ => {}
         }
         MemoryWrite::Pass
-    }
-
-    fn step(&mut self, elapsed_cycles: u16) {
-        for _ in 0..elapsed_cycles / M_CYCLE {
-            if self.overflowed {
-                self.tima = self.tma;
-                self.overflowed = false;
-                self.interrupt_request.timer(true);
-            }
-            self.state_change(self.counter.wrapping_add(M_CYCLE), self.tac);
-        }
     }
 }
