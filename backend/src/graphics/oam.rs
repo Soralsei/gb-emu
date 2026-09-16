@@ -5,7 +5,7 @@ use std::{cell::Cell, rc::Rc};
 use crate::{
     clock::{Clocked, M_CYCLE},
     memory::{
-        bus::{Bus, BusController},
+        bus::{Bus, BusController, BusOwner},
         mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
     },
 };
@@ -55,8 +55,8 @@ impl MemoryHandler for DMAController {
         // Release any held bus just in case this is interrupting a running transfer
         if matches!(self.oam_transfer_state.get(), OAMTransferState::InProgress) {
             self.bus_controller
-                .release_bus_for((self.src_addr_reg.get() as u16) << 8);
-            self.bus_controller.release(Bus::Oam);
+                .release_bus_for((self.src_addr_reg.get() as u16) << 8, BusOwner::Dma);
+            self.bus_controller.release(Bus::Oam, BusOwner::Dma);
         }
 
         self.src_addr_reg.set(value);
@@ -79,16 +79,17 @@ impl Clocked for DMAController {
 
                     if self.current_index.get() > 0x9F {
                         self.oam_transfer_state.replace(OAMTransferState::Idle);
-                        self.bus_controller.release_bus_for(src_addr);
-                        self.bus_controller.release(Bus::Oam);
+                        self.bus_controller.release_bus_for(src_addr, BusOwner::Dma);
+                        self.bus_controller.release(Bus::Oam, BusOwner::Dma);
                         return;
                     }
 
                     let value = self.mmu.peek(src_addr);
 
                     // Idempotent
-                    self.bus_controller.seize(Bus::Oam, 0xFF);
-                    self.bus_controller.seize_bus_of(src_addr, value);
+                    self.bus_controller.seize(Bus::Oam, BusOwner::Dma, 0xFF);
+                    self.bus_controller
+                        .seize_bus_of(src_addr, BusOwner::Dma, value);
 
                     self.mmu
                         .poke(0xFE00 | self.current_index.get() as u16, value);

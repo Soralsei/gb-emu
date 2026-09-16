@@ -83,7 +83,11 @@ impl System {
             clock.clone(),
             is_cgb,
         );
-        let ppu = Rc::new(Ppu::new(interrupt_controller.request()));
+        let ppu = Rc::new(Ppu::new(
+            interrupt_controller.request(),
+            bus_controller.clone(),
+            is_cgb,
+        ));
         let dma = Rc::new(DMAController::new(mmu.clone(), bus_controller.clone()));
 
         clock.attach(timer.clone());

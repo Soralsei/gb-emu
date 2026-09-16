@@ -2,13 +2,13 @@ use crate::is_bit_set;
 
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(u8)]
-pub enum ObjectPriority {
+pub enum TilePriority {
     #[default]
     None = 0,
     BgWindow = 1,
 }
 
-impl From<bool> for ObjectPriority {
+impl From<bool> for TilePriority {
     fn from(value: bool) -> Self {
         if value {
             return Self::BgWindow;
@@ -51,7 +51,7 @@ impl From<bool> for CGBBank {
 
 pub struct ObjectFlags(u8);
 impl ObjectFlags {
-    pub fn priority(&self) -> ObjectPriority {
+    pub fn priority(&self) -> TilePriority {
         is_bit_set!(self.0, 7).into()
     }
 
@@ -97,5 +97,30 @@ impl ObjectAttribute {
     // Byte 3
     pub fn flags(&self) -> ObjectFlags {
         ObjectFlags(((self.0 >> 24) & 0xFF) as u8)
+    }
+}
+
+/// CGB-only
+pub struct BgAttributes(pub u8);
+
+impl BgAttributes {
+    pub fn palette(&self) -> u8 {
+        self.0 & 7
+    }
+
+    pub fn bank(&self) -> CGBBank {
+        is_bit_set!(self.0, 3).into()
+    }
+
+    pub fn flip_x(&self) -> bool {
+        is_bit_set!(self.0, 5)
+    }
+
+    pub fn flip_y(&self) -> bool {
+        is_bit_set!(self.0, 6)
+    }
+
+    pub fn priority(&self) -> TilePriority {
+        is_bit_set!(self.0, 7).into()
     }
 }

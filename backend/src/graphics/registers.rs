@@ -8,6 +8,29 @@ pub enum TileArea {
     High = 1,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TileAddressing {
+    #[default]
+    Mode8800 = 0,
+    Mode8000 = 1,
+}
+impl From<TileAddressing> for u8 {
+    fn from(value: TileAddressing) -> Self {
+        value as u8
+    }
+}
+
+impl From<bool> for TileAddressing {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Mode8000
+        } else {
+            Self::Mode8800
+        }
+    }
+}
+
 impl From<TileArea> for u8 {
     fn from(value: TileArea) -> Self {
         value as u8
@@ -59,14 +82,14 @@ impl From<bool> for ObjSize {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LcdControl {
-    pub lcd_ppu_enable: bool,           // bit 7
-    pub window_tilemap_area: TileArea,  // bit 6
-    pub window_enable: bool,            // bit 5
-    pub bg_window_tiles_area: TileArea, // bit 4
-    pub bg_tilemap_area: TileArea,      // bit 3
-    pub obj_size: ObjSize,              // bit 2
-    pub obj_enable: bool,               // bit 1
-    pub bg_window_enable: bool,         // bit 0, has different meaning in CGB mode
+    pub lcd_ppu_enable: bool,                 // bit 7
+    pub window_tilemap_area: TileArea,        // bit 6
+    pub window_enable: bool,                  // bit 5
+    pub bg_window_tiles_area: TileAddressing, // bit 4
+    pub bg_tilemap_area: TileArea,            // bit 3
+    pub obj_size: ObjSize,                    // bit 2
+    pub obj_enable: bool,                     // bit 1
+    pub bg_window_enable: bool,               // bit 0, has different meaning in CGB mode
 }
 
 impl From<LcdControl> for u8 {
@@ -263,5 +286,17 @@ impl PpuRegisters {
 
     pub fn vram_bank(&self) -> u8 {
         self.vram_bank
+    }
+
+    pub fn bgp(&self) -> u8 {
+        self.bgp
+    }
+
+    pub fn obp0(&self) -> u8 {
+        self.obp0
+    }
+
+    pub fn obp1(&self) -> u8 {
+        self.obp1
     }
 }

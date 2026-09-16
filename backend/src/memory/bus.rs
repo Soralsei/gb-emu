@@ -11,22 +11,32 @@ pub enum Bus {
     Oam = 2,
 }
 
+/// Who is driving a bus. A bus can be held by more than one at once — OAM DMA
+/// holds OAM across a whole transfer, which spans several PPU mode changes —
+/// so ownership is a mask and the bus unlocks only once every holder is gone.
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum BusOwner {
+    Dma = 1 << 0,
+    Ppu = 1 << 1,
+}
+
 pub struct BusController {
-    slots: [Cell<Option<u8>>; 3], // indexed by Bus
+    owners: [Cell<u8>; 3],   // indexed by Bus, mask of BusOwner
+    conflict: [Cell<u8>; 3], // value the CPU sees while held
 }
 
 impl BusController {
     pub fn new() -> Self {
         Self {
-            slots: [const { Cell::new(None) }; 3],
+            owners: [const { Cell::new(0) }; 3],
+            conflict: [const { Cell::new(0xFF) }; 3],
         }
     }
 
     pub fn conflict(&self, address: u16) -> Option<u8> {
-        match BusController::bus_for(address) {
-            Some(bus) => self.slots[bus as usize].get(),
-            None => None,
-        }
+        let bus = BusController::bus_for(address)? as usize;
+        (self.owners[bus].get() != 0).then(|| self.conflict[bus].get())
     }
 
     fn bus_for(address: u16) -> Option<Bus> {
@@ -38,23 +48,24 @@ impl BusController {
         }
     }
 
-    pub fn seize(&self, bus: Bus, conflict_value: u8) {
-        self.slots[bus as usize].set(Some(conflict_value));
+    pub fn seize(&self, bus: Bus, owner: BusOwner, conflict_value: u8) {
+        self.owners[bus as usize].update(|mask| mask | owner as u8);
+        self.conflict[bus as usize].set(conflict_value);
     }
 
-    pub fn seize_bus_of(&self, address: u16, conflict_value: u8) {
+    pub fn seize_bus_of(&self, address: u16, owner: BusOwner, conflict_value: u8) {
         if let Some(bus) = BusController::bus_for(address) {
-            self.seize(bus, conflict_value);
+            self.seize(bus, owner, conflict_value);
         }
     }
 
-    pub fn release(&self, bus: Bus) {
-        self.slots[bus as usize].set(None);
+    pub fn release(&self, bus: Bus, owner: BusOwner) {
+        self.owners[bus as usize].update(|mask| mask & !(owner as u8));
     }
 
-    pub fn release_bus_for(&self, address: u16) {
+    pub fn release_bus_for(&self, address: u16, owner: BusOwner) {
         if let Some(bus) = BusController::bus_for(address) {
-            self.release(bus);
+            self.release(bus, owner);
         }
     }
 }
@@ -101,5 +112,63 @@ impl CpuBus {
     /// CPU reads state rather than driving the bus (STOP checking IE/IF/JOYP).
     pub fn peek(&self, address: u16) -> u8 {
         self.mmu.peek(address)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VRAM: u16 = 0x8000;
+    const OAM: u16 = 0xFE00;
+
+    #[test]
+    fn a_held_bus_reads_the_conflict_value() {
+        let bus = BusController::new();
+        assert_eq!(bus.conflict(VRAM), None);
+
+        bus.seize(Bus::Video, BusOwner::Ppu, 0xFF);
+        assert_eq!(bus.conflict(VRAM), Some(0xFF));
+
+        bus.release(Bus::Video, BusOwner::Ppu);
+        assert_eq!(bus.conflict(VRAM), None);
+    }
+
+    #[test]
+    fn releasing_one_owner_leaves_the_other_holding() {
+        let bus = BusController::new();
+        // OAM DMA holds OAM across a whole transfer; the PPU takes and drops it
+        // every scanline. The PPU's release must not open the bus under the DMA.
+        bus.seize(Bus::Oam, BusOwner::Dma, 0xFF);
+        bus.seize(Bus::Oam, BusOwner::Ppu, 0xFF);
+
+        bus.release(Bus::Oam, BusOwner::Ppu);
+        assert_eq!(bus.conflict(OAM), Some(0xFF), "DMA still holds OAM");
+
+        bus.release(Bus::Oam, BusOwner::Dma);
+        assert_eq!(bus.conflict(OAM), None);
+    }
+
+    #[test]
+    fn seizing_twice_needs_only_one_release() {
+        let bus = BusController::new();
+        // The DMA re-seizes every M-cycle of its transfer.
+        bus.seize(Bus::Oam, BusOwner::Dma, 0xFF);
+        bus.seize(Bus::Oam, BusOwner::Dma, 0xFF);
+        bus.release(Bus::Oam, BusOwner::Dma);
+        assert_eq!(bus.conflict(OAM), None, "ownership is a mask, not a count");
+    }
+
+    #[test]
+    fn registers_are_never_arbitrated() {
+        let bus = BusController::new();
+        bus.seize(Bus::Video, BusOwner::Ppu, 0xFF);
+        bus.seize(Bus::Oam, BusOwner::Ppu, 0xFF);
+        assert_eq!(
+            bus.conflict(0xFF40),
+            None,
+            "LCDC is not on an arbitrated bus"
+        );
+        assert_eq!(bus.conflict(0xFF80), None, "HRAM stays reachable");
     }
 }

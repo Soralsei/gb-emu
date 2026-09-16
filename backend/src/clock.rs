@@ -43,6 +43,21 @@ impl Timeline {
     pub fn position(&self) -> Cycles {
         self.at.get()
     }
+
+    /// A concurrent branch: shares the clock, owns its own position. `clone`
+    /// is for helpers that run *on* the caller's timeline; `fork` is for
+    /// sub-tasks that advance beside it.
+    pub fn fork(&self) -> Timeline {
+        Timeline {
+            now: self.now.clone(),
+            at: Rc::new(Cell::new(self.at.get())),
+        }
+    }
+
+    /// Absorb a branch's progress back into this timeline.
+    pub fn join(&self, branch: &Timeline) {
+        self.at.set(self.at.get().max(branch.at.get()));
+    }
 }
 
 /// `wait` advances the task's position as a side effect, so dropping one
