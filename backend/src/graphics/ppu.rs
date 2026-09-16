@@ -436,7 +436,7 @@ impl Ppu {
             TileAddressing::Mode8000 => 0x8000 + (tile as u16 * 16),
         };
         let low_addr = tile_data_base + (fine_y * 2) as u16;
-        let high_addr = (tile_data_base + (fine_y * 2) as u16 + 1u16);
+        let high_addr = tile_data_base + (fine_y * 2) as u16 + 1u16;
 
         let tile_low = self.vram[bank as usize][low_addr as usize - 0x8000].get();
         timeline.wait(2).await;

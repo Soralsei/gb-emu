@@ -9,3 +9,5 @@ edition = "2021"
 minifb = "0.28.0"
 backend = { path = "../backend" }
 clap = "4.6.6"
+eframe = "0.36.2"
+egui = "0.36.2"

@@ -124,7 +124,8 @@ impl SerialState {
         }
         // Slave
         else {
-            eprintln!("TODO: Implement serial transfer for slave");
+            // TODO
+            // eprintln!("TODO: Implement serial transfer for slave");
         }
     }
 }

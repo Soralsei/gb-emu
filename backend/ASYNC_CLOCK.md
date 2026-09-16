@@ -1,7 +1,11 @@
 # Design note: the clock as an async executor
 
-Status: **not implemented**. This records a design worked out in discussion so it
-can be picked up later. Nothing here is in `backend/src/clock.rs` yet.
+Status: **partially implemented**. Steps 1 and 2 of "Order of work" have landed:
+`Timeline`, `Wait`, `Domain`, `spawn` and `poll_tasks` are in
+`backend/src/clock.rs`, and the PPU runs as a task spawned from `System::new`.
+The timer, serial and OAM DMA are still `Clocked`, the CPU still drives the
+clock, and nothing in "Savestates" exists. The rest records a design worked out
+in discussion so it can be picked up later.
 
 ## Why
 
@@ -373,9 +377,41 @@ Unaffected, and arguably helped. Deadlines *are* absolute cycle counts:
 bus access, the PPU task runs four dot-iterations in one poll and parks. Timing
 is identical to a hand-written dot loop.
 
-The M-cycle is the smallest quantum at which any change is observable anyway,
-because every writer — the CPU and OAM DMA alike — moves at M-cycle granularity.
-Polling in batches of 4 dots loses nothing.
+The M-cycle is the smallest quantum at which any *write* is observable, because
+every writer — the CPU and OAM DMA alike — moves at M-cycle granularity. Batching
+4 dots loses nothing there.
+
+### What batching does lose: ordering inside the lump
+
+Cycles are conserved. `Timeline::wait` is cumulative (`at + n`, not `now + n`)
+and `Wait::poll` is `now >= at`, so a task that wanted to wake at +2 wakes at +4
+and its next `wait(2)` returns `Ready` in the same poll — the state machine runs
+forward until it genuinely blocks. Nothing is dropped.
+
+What is lost is the *interleaving*. `Clock::tick(4)` advances `now` by 4, steps
+both device vectors by 4, then polls tasks once. So the PPU burns four dots in
+one go and the CPU's bus access resolves against whatever state that left behind.
+
+`CpuBus::read` makes it concrete: it calls `clock.tick(M_CYCLE)` and *then* asks
+`bus_controller.conflict(address)`. The PPU has already run its four dots, so the
+CPU samples the bus at the end of the M-cycle rather than at the dot its access
+actually occupies. Any mode-3 edge that turns on when the VRAM lock is taken or
+released relative to a CPU access is decided at the wrong resolution.
+
+This is the same defect `codegen/MICRO_OPS.md` names from the CPU side — "`spend()`
+ticks an instruction's remaining cycles *after* its effects are applied, so writes
+land at the wrong M-cycle offset". One cause, two symptoms.
+
+The fix is to make the tick atomic at its real granularity: `tick(1)`, four times,
+rather than `tick(4)` once. Deadlines then land on the dot they name and devices
+interleave as they do on the hardware. Cost is 4× the poll rate — `poll_tasks`
+iterates every task plus both device vectors per tick, so ~4.19M polls/second
+instead of ~1.05M. That is the "No scheduling at all" argument cashed at four
+times the rate; it still holds at five tasks, and it is the first thing to revisit
+with a profile.
+
+Worth doing before the WX ≤ 7 and mode-3 penalty work, not after. Those are
+exactly the quirks that live in the dots this flattens.
 
 The genuinely hard PPU-timing cases are all "at dot N, sample a register, maybe
 restart a 5-step sequence":

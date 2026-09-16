@@ -32,7 +32,7 @@ impl MbcType {
     pub fn new(code: u8, rom: Vec<u8>, rom_size: usize, ram_size: usize) -> MbcType {
         match code {
             0x00 => MbcType::MbcNone(MbcNone::new(rom, ram_size)),
-            0x01 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
+            0x01 | 0x02 | 0x03 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
             _ => unimplemented!("Mbc type 0x{:02X} not yet implemented", code),
         }
     }
@@ -93,7 +93,7 @@ impl MbcNone {
     }
 
     fn has_ram(&self) -> bool {
-        self.ram.is_empty()
+        !self.ram.is_empty()
     }
 }
 
@@ -176,7 +176,7 @@ impl Mbc1 {
     }
 
     fn has_ram(&self) -> bool {
-        self.ram.is_empty()
+        !self.ram.is_empty()
     }
 
     fn rom_needs_extended_banking(&self) -> bool {
@@ -215,14 +215,14 @@ impl MemoryBank for Mbc1 {
             }
             0x4000..=0x7FFF => {
                 let bank_mask = self.get_bank_num_mask() as u8;
-                let corrected_bank1 = Mbc1::maybe_one_bank(self.rom_bank_number) & bank_mask;
+                let corrected_bank1 = Mbc1::maybe_one_bank(self.rom_bank_number);
                 let bank2_number: u8 = if self.rom_needs_extended_banking() {
                     (self.ram_bank_number & 0b11) << 5
                 } else {
                     0
                 };
 
-                let mut bank_number = bank2_number | corrected_bank1;
+                let mut bank_number = (bank2_number | corrected_bank1) & bank_mask;
                 // Get the address inside the selected bank
                 // strictly equivalent to bank_number * ROM_BANK_SIZE + (address - 0x4000)
                 let bank_addr: usize = (bank_number as usize * ROM_BANK_SIZE)
@@ -250,10 +250,6 @@ impl MemoryBank for Mbc1 {
             }
             0x2000..=0x3FFF => {
                 self.rom_bank_number = value & 0b11111;
-                eprintln!(
-                    "Writing value 0x{:02X} => 0x{:02X} to BANK1 register",
-                    value, self.rom_bank_number
-                );
                 MemoryWrite::Block
             }
             0x4000..=0x5FFF => {
@@ -302,6 +298,13 @@ impl Cartridge {
             0x05 => RAM_BANK_SIZE * 8,
             _ => 0,
         };
+        assert_eq!(
+            rom_size,
+            rom.len(),
+            "Rom looks truncated : expected {}, got {}",
+            rom_size,
+            rom.len()
+        );
         Self {
             title: title.to_string(),
             cgb: is_bit_set!(rom[0x143], CGB),
@@ -329,30 +332,21 @@ impl MemoryHandler for Cartridge {
 
 impl fmt::Display for Cartridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ram_size = match self.ram_size {
-            0x0 => "None",
-            0x1 => "Unused",
-            0x2 => "8 KiB",
-            0x3 => "32 KiB",
-            0x4 => "128 KiB",
-            0x5 => "64 KiB",
-            _ => "Unknown",
-        };
         write!(
             f,
             "Cartridge {{
             Title : {},
             MBC: {},
             CGB : {} | CGB only : {},
-            RAM size : {},
+            RAM size : {} KiB,
             ROM size : {} KiB
         }}",
             self.title,
             self.mbc.borrow(),
             self.cgb,
             self.cgb_only,
-            ram_size,
-            self.rom_size
+            self.ram_size / 1024,
+            self.rom_size / 1024
         )
     }
 }
