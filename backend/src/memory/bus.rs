@@ -93,7 +93,9 @@ impl CpuBus {
     }
 
     pub fn read(&self, address: u16) -> u8 {
-        self.clock.tick(M_CYCLE);
+        for _ in 0..M_CYCLE {
+            self.clock.tick();
+        }
         match self.bus_controller.conflict(address) {
             // Whoever owns the bus is driving it; the CPU sees their value.
             Some(conflict) => conflict,
@@ -102,7 +104,9 @@ impl CpuBus {
     }
 
     pub fn write(&self, address: u16, value: u8) {
-        self.clock.tick(M_CYCLE);
+        for _ in 0..M_CYCLE {
+            self.clock.tick();
+        }
         if self.bus_controller.conflict(address).is_none() {
             self.mmu.poke(address, value);
         }

@@ -191,7 +191,6 @@ impl Ppu {
                 }
             }
         }
-        unreachable!()
     }
 
     /// A mode transition moves three things at once: the STAT mode bits, the
@@ -614,7 +613,7 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
-            let clock = Clock::new(false);
+            let clock = Clock::new();
             let interrupts = Rc::new(InterruptController::new());
             let ppu = Rc::new(Ppu::new(
                 interrupts.request(),
@@ -639,8 +638,8 @@ mod tests {
 
         /// One full frame is 154 lines of 456 dots.
         fn run_frame(&self) {
-            for _ in 0..(70224 / 4) {
-                self.clock.tick(4);
+            for _ in 0..(70224) {
+                self.clock.tick();
             }
         }
     }

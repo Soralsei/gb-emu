@@ -1,7 +1,7 @@
 use std::cell::Ref;
 use std::rc::Rc;
 
-use crate::clock::{Clock, Domain};
+use crate::clock::{Clock, ClockControl, Domain};
 use crate::graphics::oam::DMAController;
 use crate::graphics::ppu::{Frame, Ppu};
 use crate::input::{Button, JoypadHandler};
@@ -17,13 +17,13 @@ use super::cpu::timer::Timer;
 #[cfg(feature = "blaarg")]
 use super::debug::blaarg_spy::BlaargSpy;
 use super::memory::mmu::Mmu;
-use super::memory::serial::Serial;
+use super::memory::serial::{LogSink, Serial};
 
 const CYCLES_PER_FRAME: u32 = 70224; // 154 lines * 456 T-cycles
 
 /// KEY1 (0xFF4D). Both meaningful bits — current speed and the armed switch —
 /// are clock state, so the handler is a pure view onto `Clock`.
-struct SpeedSwitch(Rc<Clock>);
+struct SpeedSwitch(ClockControl);
 
 impl MemoryHandler for SpeedSwitch {
     fn read(&self, _mmu: &Mmu, _address: u16) -> MemoryRead {
@@ -62,13 +62,13 @@ impl System {
         let mbc = Rc::new(Mbc::new(boot_rom, rom));
         let is_cgb = mbc.cartridge().is_cgb_only() || is_cgb_override;
 
-        let clock = Clock::new(is_cgb);
+        let clock = Clock::new();
 
         let interrupt_controller = Rc::new(InterruptController::new());
-        let serial = Rc::new(Serial::new(interrupt_controller.request()));
+        let serial = Rc::new(Serial::new(interrupt_controller.request(), LogSink));
         let timer = Rc::new(Timer::new(
             interrupt_controller.request(),
-            clock.clone(),
+            clock.clock_control(),
             is_cgb,
         ));
         let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
@@ -81,6 +81,7 @@ impl System {
         let cpu = Cpu::new(
             CpuBus::new(mmu.clone(), bus_controller.clone(), clock.clone()),
             clock.clone(),
+            clock.clock_control(),
             is_cgb,
         );
         let ppu = Rc::new(Ppu::new(
@@ -90,11 +91,14 @@ impl System {
         ));
         let dma = Rc::new(DMAController::new(mmu.clone(), bus_controller.clone()));
 
-        clock.attach(timer.clone());
-        clock.attach(serial.clone());
-        clock.attach(dma.clone());
-
         clock.spawn(Domain::Fixed, |timeline| Ppu::task(ppu.clone(), timeline));
+        clock.spawn(Domain::Cpu, |timeline| {
+            Serial::task(serial.clone(), timeline)
+        });
+        clock.spawn(Domain::Cpu, |timeline| {
+            DMAController::task(dma.clone(), timeline)
+        });
+        clock.spawn(Domain::Cpu, |timeline| Timer::task(timer.clone(), timeline));
 
         #[cfg(feature = "blaarg")]
         {
@@ -123,8 +127,13 @@ impl System {
         mmu.add_handler((0xFF04, 0xFF07), timer.clone());
 
         mmu.add_handler((0xFF0F, 0xFF0F), interrupt_controller.clone());
-        mmu.add_handler((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(clock.clone())));
-        if !is_cgb {
+        if is_cgb {
+            mmu.add_handler(
+                (0xFF4D, 0xFF4D),
+                Rc::new(SpeedSwitch(clock.clock_control())),
+            );
+            // TODO: map other IO registers in the CGB
+        } else {
             let unmapped = Rc::new(Unmapped);
             mmu.add_handler((0xFF4D, 0xFF4D), unmapped.clone()); // KEY1
             mmu.add_handler((0xFF4F, 0xFF4F), unmapped.clone()); // VBK
@@ -162,13 +171,6 @@ impl System {
     }
 
     pub fn get_framebuffer(&self) -> Ref<'_, Frame> {
-        // static mut COUNTER: usize = 0;
-        // static mut FRAMEBUFFER: [u8; SCREEN_W * SCREEN_H] = [0u8; SCREEN_W * SCREEN_H];
-        // unsafe {
-        //     render_test_pattern(&mut FRAMEBUFFER, SCREEN_W, COUNTER);
-        //     COUNTER += 1;
-        //     &FRAMEBUFFER
-        // }
         self.ppu.framebuffer()
     }
 
@@ -177,45 +179,5 @@ impl System {
             self.clock.resume();
             self.cpu.resume();
         }
-    }
-}
-
-pub fn render_test_pattern(framebuffer: &mut [u8], width: usize, frame_counter: usize) {
-    const NUM_COLORS: usize = 4;
-
-    let bayer: [[f32; 4]; 4] = [
-        [0.0 / 16.0, 8.0 / 16.0, 2.0 / 16.0, 10.0 / 16.0],
-        [12.0 / 16.0, 4.0 / 16.0, 14.0 / 16.0, 6.0 / 16.0],
-        [3.0 / 16.0, 11.0 / 16.0, 1.0 / 16.0, 9.0 / 16.0],
-        [15.0 / 16.0, 7.0 / 16.0, 13.0 / 16.0, 5.0 / 16.0],
-    ];
-
-    let animation_speed = 3;
-
-    for (i, pixel) in framebuffer.iter_mut().enumerate() {
-        let x = i % width;
-        let y = i / width;
-
-        let shifted_x = (x + (frame_counter * animation_speed)) % width;
-
-        let t = shifted_x as f32 / (width - 1) as f32;
-        let scaled_t = t * (NUM_COLORS - 1) as f32;
-
-        let mut index = scaled_t.floor() as usize;
-        let mut fraction = scaled_t - index as f32;
-
-        if index >= NUM_COLORS - 1 {
-            index = NUM_COLORS - 2;
-            fraction = 1.0;
-        }
-
-        let threshold = bayer[y % 4][x % 4];
-
-        let final_index = if fraction > threshold {
-            index + 1
-        } else {
-            index
-        };
-        *pixel = final_index as u8;
     }
 }

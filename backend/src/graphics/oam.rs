@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, convert::Infallible, rc::Rc};
 
 use crate::{
-    clock::{Clocked, M_CYCLE},
+    clock::{Cycles, Timeline, M_CYCLE},
     memory::{
         bus::{Bus, BusController, BusOwner},
         mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
@@ -16,12 +16,24 @@ enum OAMTransferState {
     InProgress,
 }
 
+struct DMAState {
+    pub src_addr_reg: Cell<u8>,
+    pub requested: Cell<bool>,
+}
+
+impl DMAState {
+    pub fn new() -> Self {
+        Self {
+            src_addr_reg: Cell::new(0xFF),
+            requested: Cell::new(false),
+        }
+    }
+}
+
 pub struct DMAController {
     mmu: Rc<Mmu>,
     bus_controller: Rc<BusController>,
-    oam_transfer_state: Cell<OAMTransferState>,
-    current_index: Cell<u8>,
-    src_addr_reg: Cell<u8>,
+    state: DMAState,
 }
 
 impl DMAController {
@@ -29,9 +41,33 @@ impl DMAController {
         Self {
             mmu,
             bus_controller,
-            oam_transfer_state: Cell::new(OAMTransferState::Idle),
-            current_index: Cell::new(0),
-            src_addr_reg: Cell::new(0xFF),
+            state: DMAState::new(),
+        }
+    }
+
+    pub async fn task(this: Rc<DMAController>, timeline: Timeline) -> Infallible {
+        loop {
+            while !this.state.requested.get() {
+                timeline.wait(M_CYCLE as Cycles).await;
+            }
+            let src = (this.state.src_addr_reg.get() as u16) << 8;
+            for offset in 0..0xA0u16 {
+                let src_addr = src | offset;
+                timeline.wait(M_CYCLE as Cycles).await;
+                // resume checkpoint for save states go here
+                // ...
+                let value = this.mmu.peek(src | offset);
+
+                // Idempotent
+                this.bus_controller.seize(Bus::Oam, BusOwner::Dma, 0xFF);
+                this.bus_controller
+                    .seize_bus_of(src_addr, BusOwner::Dma, value);
+
+                this.mmu.poke(0xFE00 | offset, value);
+            }
+            this.bus_controller.release_bus_for(src, BusOwner::Dma);
+            this.bus_controller.release(Bus::Oam, BusOwner::Dma);
+            this.state.requested.set(false);
         }
     }
 }
@@ -41,7 +77,7 @@ impl MemoryHandler for DMAController {
         if address != 0xFF46 {
             unreachable!("Invalid read in DMAController at address 0x{:04X}", address)
         }
-        MemoryRead::Replace(self.src_addr_reg.get())
+        MemoryRead::Replace(self.state.src_addr_reg.get())
     }
 
     fn write(&self, _: &Mmu, address: u16, value: u8) -> MemoryWrite {
@@ -53,49 +89,12 @@ impl MemoryHandler for DMAController {
         }
 
         // Release any held bus just in case this is interrupting a running transfer
-        if matches!(self.oam_transfer_state.get(), OAMTransferState::InProgress) {
-            self.bus_controller
-                .release_bus_for((self.src_addr_reg.get() as u16) << 8, BusOwner::Dma);
-            self.bus_controller.release(Bus::Oam, BusOwner::Dma);
-        }
+        self.bus_controller
+            .release_bus_for((self.state.src_addr_reg.get() as u16) << 8, BusOwner::Dma);
+        self.bus_controller.release(Bus::Oam, BusOwner::Dma);
 
-        self.src_addr_reg.set(value);
-        // Will start on next clock tick, since write ticks happens before pokes
-        // meaning the clock has already ticked here, and wil only tick next cycle
-        self.oam_transfer_state.set(OAMTransferState::InProgress);
-        self.current_index.set(0);
+        self.state.src_addr_reg.set(value);
+        self.state.requested.set(true);
         MemoryWrite::Block
-    }
-}
-
-impl Clocked for DMAController {
-    fn step(&self, elapsed: u16) {
-        match self.oam_transfer_state.get() {
-            OAMTransferState::Idle => (),
-            OAMTransferState::InProgress => {
-                for _ in 0..(elapsed / M_CYCLE) {
-                    let src_addr: u16 =
-                        ((self.src_addr_reg.get() as u16) << 8) | self.current_index.get() as u16;
-
-                    if self.current_index.get() > 0x9F {
-                        self.oam_transfer_state.replace(OAMTransferState::Idle);
-                        self.bus_controller.release_bus_for(src_addr, BusOwner::Dma);
-                        self.bus_controller.release(Bus::Oam, BusOwner::Dma);
-                        return;
-                    }
-
-                    let value = self.mmu.peek(src_addr);
-
-                    // Idempotent
-                    self.bus_controller.seize(Bus::Oam, BusOwner::Dma, 0xFF);
-                    self.bus_controller
-                        .seize_bus_of(src_addr, BusOwner::Dma, value);
-
-                    self.mmu
-                        .poke(0xFE00 | self.current_index.get() as u16, value);
-                    self.current_index.update(|idx| idx + 1);
-                }
-            }
-        }
     }
 }

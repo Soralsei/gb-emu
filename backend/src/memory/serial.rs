@@ -1,36 +1,104 @@
-use std::cell::RefCell;
+use std::io::Write;
+use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
-use crate::{clock::Clocked, cpu::interrupt::InterruptRequest, is_bit_set};
+use crate::{
+    clock::{Cycles, Timeline, M_CYCLE},
+    cpu::interrupt::InterruptRequest,
+    is_bit_set,
+};
 
-const CYCLES_TO_SEND: u32 = 512 * 8; // 8192Hz clock => 512 cpu cycles * 8 bits
+const CYCLES_TO_SEND: Cycles = 512 * 8; // 8192Hz clock => 512 cpu cycles * 8 bits
 const CLOCK_SELECT: u8 = 0;
 const CLOCK_SPEED: u8 = 1;
 const TRANSFER_ENABLE: u8 = 7;
 
-/// Like the timer, serial is only reached by its own `step` and its own
-/// register handler, so one cell at the boundary keeps the logic on `&mut self`.
-pub struct Serial {
+/// The other end of the link cable.
+///
+/// A transfer is an exchange, not a send: the same eight clock pulses shift a
+/// byte out and a byte in at once. So one call covers both directions, and an
+/// implementation that only consumes — a log — leaves `recv` at its default and
+/// reads as an unplugged port.
+pub trait ByteSink {
+    /// The byte a completed transfer shifted out.
+    fn send(&self, byte: u8);
+
+    /// The byte that same transfer shifted in. An unplugged port pulls the line
+    /// high, which is what a game polling an absent peer expects to see.
+    fn recv(&self) -> u8 {
+        0xFF
+    }
+}
+
+/// Nothing plugged in.
+pub struct NullSink;
+
+impl ByteSink for NullSink {
+    fn send(&self, _byte: u8) {}
+}
+
+/// Test ROMs report their results over the link port. Bytes are written and
+/// flushed as they arrive, so progress shows up during a run rather than only
+/// at the end.
+pub struct LogSink;
+
+impl ByteSink for LogSink {
+    fn send(&self, byte: u8) {
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(&[byte]);
+        let _ = out.flush();
+    }
+}
+
+/// Like the timer, serial is only reached by its own task and its own register
+/// handler, so one cell at the boundary keeps the logic on `&mut self`.
+pub struct Serial<S: ByteSink> {
+    sink: S,
     state: RefCell<SerialState>,
 }
 
-impl Serial {
-    pub fn new(interrupt_request: InterruptRequest) -> Self {
+impl<S: ByteSink> Serial<S> {
+    pub fn new(interrupt_request: InterruptRequest, sink: S) -> Self {
         Self {
+            sink,
             state: RefCell::new(SerialState::new(interrupt_request)),
+        }
+    }
+
+    pub async fn task(this: Rc<Serial<S>>, timeline: Timeline) -> Infallible {
+        loop {
+            // Idle until software arms a transfer. No borrow may straddle an
+            // await: the SC write handler takes the same cell.
+            let driving = loop {
+                let armed = {
+                    let state = this.state.borrow();
+                    state.transfer_enable.then_some(state.clock_select)
+                };
+                match armed {
+                    Some(driving) => break driving,
+                    None => timeline.wait(M_CYCLE as Cycles).await,
+                }
+            };
+
+            // Only the master supplies the clock. As slave the peer does, and
+            // nothing here can time it, so the transfer just stays pending.
+            if !driving {
+                timeline.wait(M_CYCLE as Cycles).await;
+                continue;
+            }
+
+            timeline.wait(CYCLES_TO_SEND).await;
+            this.state.borrow_mut().complete_transfer(&this.sink);
         }
     }
 }
 
 struct SerialState {
     interrupt_request: InterruptRequest,
-    send_byte: u8,         // Next byte
-    recv_byte: u8,         // Received btye
+    send_byte: u8,         // address 0xFF01, holds the received byte afterwards
     transfer_enable: bool, // true if there is an ongoing or pending transfer
     clock_speed: bool,     // CGB only: false: normal, true: fast
     clock_select: bool,    // false: external clock, true : internal
-    clock: u32,            // clock timer
-    log: String,
 }
 
 impl SerialState {
@@ -41,10 +109,16 @@ impl SerialState {
             transfer_enable: false,
             clock_speed: false,
             clock_select: true,
-            clock: 0,
-            log: String::with_capacity(150),
-            recv_byte: 0,
         }
+    }
+
+    /// Both directions land at once, because on the wire they are the same
+    /// eight pulses: SB's outgoing byte leaves and the peer's byte replaces it.
+    fn complete_transfer<S: ByteSink>(&mut self, sink: &S) {
+        sink.send(self.send_byte);
+        self.send_byte = sink.recv();
+        self.transfer_enable = false;
+        self.interrupt_request.serial(true);
     }
 
     fn set_sc(&mut self, value: u8) {
@@ -62,19 +136,13 @@ impl SerialState {
     }
 }
 
-impl MemoryHandler for Serial {
+impl<S: ByteSink> MemoryHandler for Serial<S> {
     fn read(&self, _: &Mmu, address: u16) -> MemoryRead {
         self.state.borrow().read(address)
     }
 
     fn write(&self, _: &Mmu, address: u16, value: u8) -> MemoryWrite {
         self.state.borrow_mut().write(address, value)
-    }
-}
-
-impl Clocked for Serial {
-    fn step(&self, elapsed_cycles: u16) {
-        self.state.borrow_mut().step(elapsed_cycles);
     }
 }
 
@@ -94,38 +162,9 @@ impl SerialState {
             }
             0xFF02 => {
                 self.set_sc(value);
-                // TODO : abstract byte sending to a handler (network or other)
-                // For now, just log the byte
-                if self.transfer_enable {
-                    self.log.push(self.send_byte as char);
-                    println!("{}", self.log);
-                }
             }
             _ => unreachable!("Invalid serial write : 0x{:04X}", address),
         }
         MemoryWrite::Block
-    }
-
-    fn step(&mut self, elapsed_cycles: u16) {
-        if !self.transfer_enable {
-            return;
-        }
-
-        // Master
-        if self.clock_select {
-            self.clock += elapsed_cycles as u32;
-            // Transfer done
-            if self.clock >= CYCLES_TO_SEND {
-                self.send_byte = self.recv_byte;
-                self.transfer_enable = false;
-                self.interrupt_request.serial(true);
-                self.clock = 0;
-            }
-        }
-        // Slave
-        else {
-            // TODO
-            // eprintln!("TODO: Implement serial transfer for slave");
-        }
     }
 }

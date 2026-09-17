@@ -1,8 +1,8 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use super::interrupt::InterruptRequest;
 use crate::{
-    clock::{Clock, Clocked, M_CYCLE},
+    clock::{ClockControl, Cycles, Timeline, M_CYCLE},
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
 };
@@ -17,7 +17,7 @@ pub struct Timer {
 }
 
 impl Timer {
-    pub fn new(interrupt_request: InterruptRequest, clock: Rc<Clock>, is_cgb: bool) -> Self {
+    pub fn new(interrupt_request: InterruptRequest, clock: ClockControl, is_cgb: bool) -> Self {
         Self {
             state: RefCell::new(TimerState {
                 clock,
@@ -30,10 +30,19 @@ impl Timer {
             }),
         }
     }
+
+    pub async fn task(this: Rc<Self>, timeline: Timeline) -> Infallible {
+        loop {
+            timeline.wait(M_CYCLE as Cycles).await;
+            let mut state = this.state.borrow_mut();
+            let counter = state.clock.div();
+            state.advance_to(counter);
+        }
+    }
 }
 
 struct TimerState {
-    clock: Rc<Clock>,
+    clock: ClockControl,
     interrupt_request: InterruptRequest,
     tima: u8, // address 0xFF05
     tma: u8,  // address 0xFF06
@@ -90,9 +99,11 @@ impl TimerState {
             self.is_cgb && current_selected_set && !previous_active && current_active;
 
         if selected_edge_falling || dmg_set_disabled || cgb_set_enabled {
-            let (tima, overflow) = self.tima.overflowing_add(1);
-            self.tima = tima;
-            self.overflowed |= overflow;
+            if self.tima.checked_add(1).is_none() {
+                self.tima = self.tma;
+            } else {
+                self.tima += 1;
+            }
         }
     }
 }
@@ -109,20 +120,6 @@ impl MemoryHandler for Timer {
         value: u8,
     ) -> crate::memory::mmu::MemoryWrite {
         self.state.borrow_mut().write(address, value)
-    }
-}
-
-impl Clocked for Timer {
-    fn step(&self, elapsed_cycles: u16) {
-        let mut state = self.state.borrow_mut();
-        // The window this tick covers, derived rather than stored: a stored
-        // previous sample would go stale on a DIV reset, which is the
-        // notification the clock no longer broadcasts.
-        let end = state.clock.div();
-        let start = end.wrapping_sub(elapsed_cycles);
-        for k in (M_CYCLE..=elapsed_cycles).step_by(M_CYCLE as usize) {
-            state.advance_to(start.wrapping_add(k));
-        }
     }
 }
 

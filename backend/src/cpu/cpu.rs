@@ -3,7 +3,7 @@ use std::rc::Rc;
 use super::instructions::{Instruction, Opcode, Timing};
 use super::interrupt::InterruptController;
 use super::registers::{Reg16, Reg8, Registers};
-use crate::clock::{Clock, M_CYCLE};
+use crate::clock::{Clock, ClockControl, M_CYCLE};
 use crate::cpu::instructions::Cycles;
 use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
@@ -182,16 +182,18 @@ pub struct Cpu {
     bus: CpuBus,
     ime: bool,
     clock: Rc<Clock>,
+    clock_control: ClockControl,
     mode: Mode,
 }
 
 impl Cpu {
-    pub fn new(bus: CpuBus, clock: Rc<Clock>, is_cgb: bool) -> Cpu {
+    pub fn new(bus: CpuBus, clock: Rc<Clock>, clock_control: ClockControl, is_cgb: bool) -> Cpu {
         Cpu {
             registers: Registers::new(is_cgb),
             bus,
             ime: true,
             clock,
+            clock_control,
             mode: Mode::Running,
         }
     }
@@ -210,10 +212,11 @@ impl Cpu {
     /// accesses already ticked, then start counting the next one.
     fn spend(&mut self, total_cycles: usize) -> usize {
         let elapsed = self.clock.elapsed();
-        self.clock
-            .tick((total_cycles as u32).saturating_sub(elapsed) as u16);
+        for _ in 0..(total_cycles as u64).saturating_sub(elapsed) {
+            self.clock.tick();
+        }
         self.clock.reset();
-        elapsed.max(total_cycles as u32) as usize
+        elapsed.max(total_cycles as u64) as usize
     }
 
     pub fn execute_instruction(&mut self) -> usize {
@@ -222,7 +225,9 @@ impl Cpu {
             // `spend`: only the fixed-rate devices advance.
             Mode::SwitchStalled { remaining } => {
                 let step = M_CYCLE.min(remaining);
-                self.clock.tick_fixed(step);
+                for _ in 0..step {
+                    self.clock.tick_fixed();
+                }
                 // `spend` tops up against `elapsed`, so the next instruction
                 // must not be credited with the pause.
                 self.clock.reset();
@@ -306,7 +311,9 @@ impl Cpu {
 
     fn interrupt(&mut self, value: u8) {
         self.set_interrupts(false);
-        self.clock.tick(M_CYCLE);
+        for _ in 0..M_CYCLE {
+            self.clock.tick();
+        }
         self.push_u16(self.registers.pc);
         self.registers.pc = value as u16;
     }
@@ -334,7 +341,9 @@ impl Cpu {
 
     #[inline(always)]
     pub fn push_u16(&mut self, value: u16) {
-        self.clock.tick(M_CYCLE);
+        for _ in 0..M_CYCLE {
+            self.clock.tick();
+        }
         let (msb, lsb) = word_to_bytes(value);
         self.push_u8(msb);
         self.push_u8(lsb);
@@ -370,7 +379,7 @@ impl Cpu {
             return;
         }
 
-        if self.clock.switch_armed() {
+        if self.clock_control.switch_armed() {
             if interrupt_pending == 0 {
                 // STOP => 2 bytes
                 let _ = self.fetch_u8();
@@ -379,8 +388,8 @@ impl Cpu {
             //         // Maybe
             //         return Err(StopGlitchError);
             //     }
-            self.clock.reset_div();
-            self.clock.switch_speed();
+            self.clock_control.reset_div();
+            self.clock_control.switch_speed();
             // The CPU sits out the next 2050 M-cycles. Modelling it as a mode
             // rather than one burst of cycles keeps the PPU advancing through
             // the pause while DIV stays frozen.
@@ -397,7 +406,7 @@ impl Cpu {
         }
         // For both, enter STOP mode and reset DIV
         self.mode = Mode::Stopped;
-        self.clock.stop();
+        self.clock_control.stop();
     }
 
     /// A joypad press leaves STOP mode. Nothing else does, and no other mode
