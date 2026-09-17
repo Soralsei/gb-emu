@@ -1,11 +1,17 @@
 # Design note: the clock as an async executor
 
-Status: **partially implemented**. Steps 1 and 2 of "Order of work" have landed:
+Status: **partially implemented**. Steps 1 to 3 of "Order of work" have landed.
 `Timeline`, `Wait`, `Domain`, `spawn` and `poll_tasks` are in
-`backend/src/clock.rs`, and the PPU runs as a task spawned from `System::new`.
-The timer, serial and OAM DMA are still `Clocked`, the CPU still drives the
-clock, and nothing in "Savestates" exists. The rest records a design worked out
-in discussion so it can be picked up later.
+`backend/src/clock.rs`; the PPU, timer, serial and OAM DMA all run as tasks
+spawned from `System::new`, and the `Clocked` trait is deleted. The divider is
+derived on the clock. `Clock::tick` advances one T-cycle and takes no `elapsed`,
+so the batching fix in "What batching does lose" is in.
+
+Not done: the CPU still drives the clock rather than being a task — see "The CPU
+as a task", which is step 5 and the last of the migration — and nothing in
+"Savestates" exists. Step 5 is underway: `W`/`Z` are in the register file and
+`Src`/`Dst` are gone, which leaves `operations.rs` not building until 5.3. The
+rest records a design worked out in discussion so it can be picked up later.
 
 ## Why
 
@@ -42,56 +48,133 @@ costs about what an early-returning `step` costs. This is a legibility change,
 not an optimisation — see "No scheduling at all" below for why the tempting
 optimisation is not worth its complexity yet.
 
-### Relationship to `codegen/MICRO_OPS.md`
+## The CPU as a task
 
-That note wants to invert the clock direction (clock drives CPU) and says the
-cost is that instructions must be suspendable between M-cycles, which forces a
-generated micro-op schedule per opcode.
+The CPU is the last device, and the one the rest of this note was shaped around.
+`codegen/DISPATCH.md` covers what the generator emits; this covers what the
+`backend` side has to become. The two are meant to be read together.
 
-If the CPU is also a task, suspension is free and **the sequencer is not needed**.
-The instruction body's straight-line control flow stays the state machine, as it
-is today, but becomes resumable:
+### The sequencer is not needed
+
+`codegen/MICRO_OPS.md` — now `DISPATCH.md` — wanted to invert the clock direction
+and said the cost was a generated micro-op schedule per opcode, because an
+instruction has to be suspendable between M-cycles.
+
+If the CPU is a task, suspension is free. The instruction body's straight-line
+control flow stays the state machine, as it is today, but becomes resumable:
 
 ```rust
-async fn cpu(...) {
-    loop {
-        let opcode = fetch(&bus).await;
-        match opcode {
-            0x34 => { let v = bus.read(hl).await; bus.write(hl, v.wrapping_add(1)).await; }
-            /* ... */
-        }
-    }
+0x34 => {                                    // inc (hl)
+    let addr = cpu.addr(Reg16::HL);
+    cpu.load(Reg8::Z, addr).await;
+    cpu.alu(Reg8::Z, inc);
+    cpu.store(addr, Reg8::Z).await;
 }
 ```
 
-`inc (hl)`'s read and write land on separate M-cycles because there are two
-awaits, not because a schedule placed them. The `Src`/`Dst` split in MICRO_OPS.md
-§"The `Src`/`Dst` change this depends on" is still worth doing — it is what makes
-bus access an explicit, awaitable act — but the `MicroOp`/`BusAction` machinery
-and the generator's schedule-shape table drop out.
+The read and write land on separate M-cycles because there are two awaits, not
+because a schedule placed them. That also fixes the ordering defect flagged
+below and in the old note — `spend()` ticking an instruction's remaining cycles
+*after* its effects are applied — because there are no remaining cycles to tick.
+`mem_timing/03-modify_timing` is the check.
 
-What does *not* drop out is the research. The per-M-cycle bus schedule for every
-opcode is the same knowledge either way, expressed as await placement rather than
-as a `[MicroOp; 8]`. The invariant `1 + pushed_ops == cycles / 4` becomes "awaits
-in the arm == `cycles / 4`", which the generator can assert against
-`instructions.yml` rather than derive from it — a check it does not have today.
+### The bus comes out of `Src`/`Dst`
 
-The conditionals table in MICRO_OPS.md stops needing to exist: `ret cc` at 8
-cycles not taken and 20 taken falls out of an `if`, with the unconditional
-internal cycle simply preceding it. Interrupt dispatch is a function with five
-awaits instead of a pushed 5-op sequence, and the EI delay is a local in the
-loop instead of a flag applied "next time the queue empties".
+Those traits used to resolve *where* a value lives and decide *when* the bus cycle
+happens, in one call. The second job belongs to the schedule. So `Imm8`, `Imm16`,
+`Mem<T>` and `DMem<T>` are deleted and replaced by a `W`/`Z` scratch pair in the
+register file, with `WZ` as the 16-bit view — the latches the hardware has.
 
-One constraint: do **not** emit one `async fn` per opcode. Each would be a
-distinct future type, so dispatch needs `Box<dyn Future>` — an allocation per
-instruction, at ~1M instructions/second. Emit a single `async fn` with a `match`
-over the opcode. One future type, one state machine, zero allocation; its size is
-the max over all arms.
+`Src`/`Dst` then abstract over `Reg8` and `Reg16` and nothing else, which
+`Registers::read_u8`/`read_u16` already are, so both traits go too.
 
-This note does not fix the ordering problem MICRO_OPS.md flags (effects applied
-before the remaining cycles are ticked, so writes land at the wrong M-cycle
-offset). That is the same question either way, and it is fixed by the direction
-inversion, not by async.
+Then take the register file out as well. Every synchronous operation reduces to
+`(&mut Flags, values) -> value`, and the ones that need more — `jr`, `jp`, `call`,
+`ret`, `reti`, `rst`, `push`, `pop`, `ei`, `di`, `halt`, `stop` — are exactly the
+set becoming `async fn` on `&Cpu` anyway, because they move PC, SP or IME. Nothing
+is left over. `DISPATCH.md` has the signature table.
+
+`operations.rs` becomes an ALU module that knows nothing about a `Cpu`, a bus or a
+register file, which makes `daa`, `adc`, `sbc` and `add16` testable on a bare
+`Flags`. Those four are where flag bugs live, and testing one currently means
+constructing a machine.
+
+Note the `W`/`Z` decision cuts against "nothing that must survive a savestate may
+live only in a local across `.await`" in the opposite direction from usual — the
+operand latch was the example of something that *may* be a local, and making it a
+register field is strictly safer. Take the safer side; the cost is two bytes in a
+snapshot.
+
+### Shape
+
+The CPU joins the other devices: `Rc<Cpu>` with interior mutability, `&self`
+methods, `Cpu::task(this, timeline)`.
+
+Not `Rc<RefCell<Cpu>>`. The task would hold the borrow across awaits, and the
+debugger's disassembly panel repaints *while the task is parked mid-instruction*
+— see `DEBUGGER.md` §"Repaint pacing". That is a `RefCell` panic waiting for
+someone to open the panel while paused. Registers live in a `RefCell<Registers>`
+borrowed per operation call and never across an await.
+
+```rust
+pub struct Cpu {
+    registers: RefCell<Registers>,
+    ime: Cell<bool>,
+    instr: Cell<u64>,          // step boundary, ring-buffer sequence, replay resume point
+    bus: CpuBus,
+    timeline: Timeline,        // Domain::Cpu
+    fixed: Timeline,           // Domain::Fixed -- the speed-switch stall, and only that
+    clock_control: ClockControl,
+}
+```
+
+The awaiting surface is five methods, and they are the only async things in the
+CPU outside the stack operations:
+
+```rust
+async fn fetch(&self, dst: Reg8);          // PC++, bus read -> dst
+async fn load(&self, dst: Reg8, addr: u16);
+async fn store(&self, addr: u16, src: Reg8);
+async fn idle(&self);                      // an internal M-cycle
+async fn cycle(&self);                     // timeline.wait(M_CYCLE), what the others are built on
+```
+
+`CpuBus::read`/`write` become **sync** and drop their `Rc<Clock>`: the wait moved
+to `Cpu::cycle`, and arbitration is all that is left. One less `Rc` in
+`System::new`.
+
+### HALT and STOP stop being modes
+
+This is the payoff predicted at the top of this note. `Cpu::Mode`, `is_stopped()`,
+`resume()` and `spend()` all delete.
+
+| was | becomes |
+| --- | --- |
+| `Mode::Halted` | `while !self.interrupt_pending() { self.idle().await }` |
+| `Mode::Stopped` | `clock_control.stop()`, then await. `now_cpu` is frozen, so the `Wait` never completes and the task parks. `Clock::resume` restarts it. |
+| `Mode::SwitchStalled` | `self.fixed.wait(2050 * M_CYCLE).await` |
+
+Interrupt dispatch becomes a function with five awaits called at the top of the
+loop, not a separate `handle_interrupts` the frontend has to remember to call.
+The EI delay becomes a local in the loop rather than a flag, which is exactly
+"after the following instruction".
+
+### The one piece that needs new clock machinery
+
+The speed-switch stall wants `now_cpu` frozen while `now_fixed` keeps running —
+the PPU advances through the pause, DIV does not. `Clock::stop()` freezes both,
+and the CPU can no longer call `tick_fixed()` itself from inside a task.
+
+So: a `cpu_frozen: Cell<bool>` in `ClockState` honoured by `tick`, plus a way for
+the CPU to hold a second `Timeline` on the other domain, since `spawn` mints
+exactly one. The obvious shortcut — freeze `now_cpu` and have the CPU await on its
+own timeline — does not work, because that is the timeline that stopped moving.
+
+### Spawn order is load-bearing
+
+`Clock::poll_tasks` polls in spawn order, and that order is part of the savestate
+contract below. Where the CPU goes relative to the PPU and OAM DMA decides who
+sees whose writes within a tick. Pick it deliberately and do not let it drift.
 
 ## Runtime
 
@@ -329,41 +412,38 @@ their own field instead of broadcasting. Consequences:
 - one `u64` to serialise, and the APU can share the counter later without a
   second copy or a second `reset_div` recipient
 
-The timer keeps the `0xFF04`–`0xFF07` handler and takes an `Rc<Clock>`: it reads
-`clock.div()` and calls `clock.reset_div()` on a DIV write, then runs its own
-edge detect. It stays a `Clocked` device; nothing about it is a sequence, so it
-gains nothing from being a task.
+The timer keeps the `0xFF04`–`0xFF07` handler and takes a `ClockControl`: it
+reads `clock.div()` and calls `clock.reset_div()` on a DIV write, then runs its
+own edge detect. Nothing about it is a sequence, so it gains nothing from being a
+task — but it became one anyway when `Clocked` was deleted, and as a task it is
+three lines:
+
+```rust
+pub async fn task(this: Rc<Self>, timeline: Timeline) -> Infallible {
+    loop {
+        timeline.wait(M_CYCLE as Cycles).await;
+        let mut state = this.state.borrow_mut();
+        let counter = state.clock.div();
+        state.advance_to(counter);   // TMA reload, then the falling edge, in that order
+    }
+}
+```
 
 Edge detection needs a before and an after, and the obvious move — keep the
 previous sample in the timer — undoes the whole change: that sample goes stale on
 a DIV reset, so the timer would have to be *told* about resets, which is the
-notification being deleted. Derive the window instead. The timer knows `elapsed`,
-and a reset can only land between ticks (it comes from a bus write, STOP, or the
-speed switch), so `[div() - elapsed, div()]` is exactly the span this tick covers:
+notification being deleted. Derive the window instead. `advance_to` compares the
+selected bit at `counter - M_CYCLE` against `counter`, and the wait guarantees
+that is exactly the span since the last call.
 
-```rust
-impl Clocked for Timer {
-    fn step(&self, elapsed: u16) {
-        let end = self.clock.div();
-        let start = end.wrapping_sub(elapsed);
-        let mut state = self.state.borrow_mut();
-        for k in (M_CYCLE..=elapsed).step_by(M_CYCLE as usize) {
-            // Compares the selected bit at `c - M_CYCLE` against `c`, and
-            // applies the pending TMA reload, in that order.
-            state.advance_to(start.wrapping_add(k));
-        }
-    }
-}
-```
+An earlier draft of this had the timer walking `[div() - elapsed, div()]` in
+M-cycle steps, because a tick could carry several M-cycles. `Clock::tick` is one
+T-cycle now, so the walk collapsed to the single `advance_to` above.
 
 Nothing counter-shaped is stored. `TimerState` keeps `tima`, `tma`, `tac` and
 `overflowed` — all genuinely the timer's own registers — and the DIV write path
 reads `clock.div()`, detects the edge against `0`, then calls
 `clock.reset_div()`.
-
-The walk exists only because a tick can currently carry several M-cycles.
-Once the CPU is clock-driven and every tick is exactly one M-cycle, the loop
-collapses to a single `advance_to(clock.div())`.
 
 Note an existing asymmetry worth preserving deliberately rather than by accident:
 a write to `0xFF04` goes through `state_change(0, tac)` and so produces the
@@ -381,37 +461,35 @@ The M-cycle is the smallest quantum at which any *write* is observable, because
 every writer — the CPU and OAM DMA alike — moves at M-cycle granularity. Batching
 4 dots loses nothing there.
 
-### What batching does lose: ordering inside the lump
+### What batching lost: ordering inside the lump
 
-Cycles are conserved. `Timeline::wait` is cumulative (`at + n`, not `now + n`)
-and `Wait::poll` is `now >= at`, so a task that wanted to wake at +2 wakes at +4
-and its next `wait(2)` returns `Ready` in the same poll — the state machine runs
-forward until it genuinely blocks. Nothing is dropped.
+**Fixed.** `Clock::tick` advances one T-cycle and takes no `elapsed`; `CpuBus`
+loops it `M_CYCLE` times. Recorded because the reasoning is the same one the
+remaining CPU work turns on.
 
-What is lost is the *interleaving*. `Clock::tick(4)` advances `now` by 4, steps
-both device vectors by 4, then polls tasks once. So the PPU burns four dots in
-one go and the CPU's bus access resolves against whatever state that left behind.
+Cycles were always conserved. `Timeline::wait` is cumulative (`at + n`, not
+`now + n`) and `Wait::poll` is `now >= at`, so a task that wanted to wake at +2
+woke at +4 and its next `wait(2)` returned `Ready` in the same poll — the state
+machine runs forward until it genuinely blocks. Nothing was dropped.
 
-`CpuBus::read` makes it concrete: it calls `clock.tick(M_CYCLE)` and *then* asks
-`bus_controller.conflict(address)`. The PPU has already run its four dots, so the
-CPU samples the bus at the end of the M-cycle rather than at the dot its access
-actually occupies. Any mode-3 edge that turns on when the VRAM lock is taken or
-released relative to a CPU access is decided at the wrong resolution.
+What was lost is the *interleaving*. `tick(4)` advanced `now` by 4 and polled
+once, so the PPU burned four dots in one go and the CPU's bus access resolved
+against whatever state that left behind. Any mode-3 edge that turns on when the
+VRAM lock is taken or released relative to a CPU access was decided at the wrong
+resolution.
 
-This is the same defect `codegen/MICRO_OPS.md` names from the CPU side — "`spend()`
-ticks an instruction's remaining cycles *after* its effects are applied, so writes
-land at the wrong M-cycle offset". One cause, two symptoms.
+That was the same defect `codegen/DISPATCH.md` names from the CPU side —
+`spend()` ticking an instruction's remaining cycles *after* its effects are
+applied, so writes land at the wrong M-cycle offset. One cause, two symptoms, and
+the CPU half is still open: it closes when the CPU becomes a task and there are no
+remaining cycles to tick.
 
-The fix is to make the tick atomic at its real granularity: `tick(1)`, four times,
-rather than `tick(4)` once. Deadlines then land on the dot they name and devices
-interleave as they do on the hardware. Cost is 4× the poll rate — `poll_tasks`
-iterates every task plus both device vectors per tick, so ~4.19M polls/second
-instead of ~1.05M. That is the "No scheduling at all" argument cashed at four
-times the rate; it still holds at five tasks, and it is the first thing to revisit
-with a profile.
+Cost of the fix was 4× the poll rate, ~4.19M polls/second instead of ~1.05M. That
+is the "No scheduling at all" argument cashed at four times the rate; it still
+holds at five tasks, and it is the first thing to revisit with a profile.
 
-Worth doing before the WX ≤ 7 and mode-3 penalty work, not after. Those are
-exactly the quirks that live in the dots this flattens.
+Done before the WX ≤ 7 and mode-3 penalty work rather than after, because those
+are exactly the quirks that live in the dots it was flattening.
 
 The genuinely hard PPU-timing cases are all "at dot N, sample a register, maybe
 restart a 5-step sequence":
@@ -502,17 +580,24 @@ separate `safe` flag to keep in step with it.
 | OAM DMA | `Byte(u8)` — 160 M-cycles, straddles frames |
 | serial | `Bit(u8)` |
 | PPU | `Line(u8)` |
-| CPU (if it becomes a task) | none — parks at an instruction boundary |
-| timer, joypad | none — stays `Clocked`, plain counters |
+| CPU | none — parks at an instruction boundary |
+| timer, joypad | none — plain counters |
 
 The CPU needs no descriptor because the top of its loop *is* a natural boundary,
 but that imposes two things. `B` becomes "the frame boundary, rounded up to the
 next instruction boundary" — at most ~24 cycles later, since quiescence cannot be
 declared mid-instruction. And the state split applies to the CPU too: the
-register file, `SP`, `PC` and `IME` are shared state, only per-instruction
-scratch (the operand latch, a decoded address) may be a local across an await.
-`IME` is the trap — nothing on the bus can read it, so it looks like a local, and
-losing it across a restore is silent.
+register file, `SP`, `PC` and `IME` are shared state, only per-instruction scratch
+may be a local across an await. `IME` is the trap — nothing on the bus can read
+it, so it looks like a local, and losing it across a restore is silent.
+
+The operand latch was the example of something that *may* be a local. It no longer
+is: `W`/`Z` are register-file fields, for the reasons in "The bus comes out of
+`Src`/`Dst`". Two bytes more in a snapshot, one less thing to get wrong.
+
+The `instr` counter on the CPU earns its keep three times over — step granularity
+for `DEBUGGER.md`, sequence numbers for its ring buffer, and a resume point for
+replay that is better than a cycle count, which collides across a speed switch.
 
 The descriptors you hand-write are exactly the ones that were trivial anyway. The
 pixel fetcher — the code this whole design is for — needs none, because you can
@@ -529,12 +614,30 @@ of that is wanted for testing and TAS regardless.
 
 ## Order of work
 
-1. Executor beside `Clock`, keeping `Clocked` for timer and joypad. Both models
-   run at once; nothing has to be ported in one go.
-2. PPU and `graphics/fifo.rs` first — biggest payoff, and the fetcher is
-   unfinished, so it is new code rather than a rewrite of something that works.
-3. Serial and OAM DMA, if it feels good.
-4. `Resume` descriptors and the snapshot/replay path only when savestates are
+1. ~~Executor beside `Clock`, keeping `Clocked` for timer and joypad.~~ Done.
+2. ~~PPU and `graphics/fifo.rs`~~ — done. Biggest payoff, and the fetcher was
+   unfinished, so it was new code rather than a rewrite of something that works.
+3. ~~Serial, OAM DMA and the timer; `Clocked` deleted.~~ Done.
+4. ~~One T-cycle per `tick`.~~ Done — "What batching lost", above.
+5. **The CPU**, with `codegen/DISPATCH.md`. Last, and the only step that touches
+   the generator. In order:
+   1. ~~`W`/`Z` in `Registers`; `Reg8::W`/`Z`, `Reg16::WZ`.~~ Done; inert on its own.
+   2. ~~Delete `Imm8`, `Imm16`, `Mem<T>`, `DMem<T>`, and then `Src`/`Dst`
+      themselves.~~ Done. Breaks the build until 5.3.
+   3. **Here.** `operations.rs` becomes flags-only: `(&mut Flags, values) ->
+      value`, `Timing` deleted. Nine drop out entirely — `ld` `ld16` `ldi` `ldd`
+      `inc16` `dec16` `add_sp` `ldhl` `nop` — because once the plumbing is emitted
+      into the arm there is nothing left in them. The twelve that move PC, SP or
+      IME become `async fn` on `&Cpu`. `offset_sp` stops reading its own immediate
+      and takes a `u8`, which is what empties the generator's override table.
+   4. Codegen: lowering, access modes, hole-filling, the three asserts, both
+      outputs. Build green again.
+   5. `Rc<Cpu>`, the five bus steps, the task, interrupt dispatch. `Mode`,
+      `spend`, `is_stopped` and `handle_interrupts` delete; `CpuBus` goes sync.
+   6. `cpu_frozen` and the second `Timeline` for the speed-switch stall.
+   7. `System::step` on the `instr` counter, per `DEBUGGER.md`.
+
+   `mem_timing/03-modify_timing` is the check on 5.5 — `inc (hl)`'s read and
+   write land on cycles 2 and 3 for the first time.
+6. `Resume` descriptors and the snapshot/replay path only when savestates are
    actually being added. That work is additive; the state split is not.
-5. The CPU last, and only together with the direction inversion in
-   `codegen/MICRO_OPS.md`.

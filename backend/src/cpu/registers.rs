@@ -5,7 +5,7 @@ const SUB_BIT: u8 = 6;
 const HALF_CARRY_BIT: u8 = 5;
 const CARRY_BIT: u8 = 4;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Flags {
     pub zero: bool,
     pub subtract: bool,
@@ -55,6 +55,8 @@ pub enum Reg8 {
     F,
     H,
     L,
+    W,
+    Z,
 }
 
 #[derive(Copy, Clone)]
@@ -65,9 +67,10 @@ pub enum Reg16 {
     HL,
     SP,
     PC,
+    WZ,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Registers {
     pub a: u8,
     pub b: u8,
@@ -77,6 +80,8 @@ pub struct Registers {
     pub f: Flags,
     pub h: u8,
     pub l: u8,
+    pub w: u8,
+    pub z: u8,
     pub sp: u16,
     pub pc: u16,
 }
@@ -96,6 +101,8 @@ impl Registers {
                 f: Flags::from(0x80),
                 h: 0x00,
                 l: 0x0D,
+                w: 0x00,
+                z: 0x00,
                 pc: 0x100,
                 sp: 0xfffe,
             };
@@ -109,6 +116,8 @@ impl Registers {
             f: Flags::from(0xB0),
             h: 0x01,
             l: 0x4D,
+            w: 0x00,
+            z: 0x00,
             pc: 0x100,
             sp: 0xfffe,
         }
@@ -125,6 +134,8 @@ impl Registers {
             Reg8::F => u8::from(&self.f),
             Reg8::H => self.h,
             Reg8::L => self.l,
+            Reg8::W => self.w,
+            Reg8::Z => self.z,
         }
     }
 
@@ -139,6 +150,8 @@ impl Registers {
             Reg8::F => self.f = Flags::from(value),
             Reg8::H => self.h = value,
             Reg8::L => self.l = value,
+            Reg8::W => self.w = value,
+            Reg8::Z => self.z = value,
         }
     }
 
@@ -151,6 +164,7 @@ impl Registers {
             Reg16::HL => self.hl(),
             Reg16::SP => self.sp,
             Reg16::PC => self.pc,
+            Reg16::WZ => self.wz(),
         }
     }
 
@@ -163,6 +177,7 @@ impl Registers {
             Reg16::HL => self.set_hl(value),
             Reg16::SP => self.sp = value,
             Reg16::PC => self.pc = value,
+            Reg16::WZ => self.set_wz(value),
         }
     }
 
@@ -184,6 +199,10 @@ impl Registers {
     #[inline(always)]
     fn hl(&self) -> u16 {
         bytes_to_word(self.h, self.l)
+    }
+
+    fn wz(&self) -> u16 {
+        bytes_to_word(self.w, self.z)
     }
 
     #[inline(always)]
@@ -212,6 +231,12 @@ impl Registers {
         let (h, l) = word_to_bytes(value);
         self.h = h;
         self.l = l;
+    }
+
+    fn set_wz(&mut self, value: u16) {
+        let (w, z) = word_to_bytes(value);
+        self.w = w;
+        self.z = z;
     }
 }
 

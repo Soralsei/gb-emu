@@ -1,164 +1,14 @@
+use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 
 use super::instructions::{Instruction, Opcode, Timing};
 use super::interrupt::InterruptController;
-use super::registers::{Reg16, Reg8, Registers};
+use super::registers::Registers;
 use crate::clock::{Clock, ClockControl, M_CYCLE};
 use crate::cpu::instructions::Cycles;
+use crate::cpu::registers::{Flags, Reg16, Reg8};
 use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
-
-pub struct Imm8;
-pub struct Imm16;
-
-#[derive(Copy, Clone)]
-pub struct Mem<T: Src<u16>>(pub T);
-#[derive(Copy, Clone)]
-pub struct DMem<T: Src<u8>>(pub T);
-
-pub trait Src<T> {
-    fn read(self, cpu: &mut Cpu) -> T;
-}
-
-pub trait Dst<T> {
-    fn write(self, cpu: &mut Cpu, val: T);
-}
-
-impl Dst<u8> for Reg8 {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, val: u8) {
-        cpu.registers.write_u8(self, val)
-    }
-}
-
-impl Dst<u16> for Reg16 {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, val: u16) {
-        #[cfg(feature = "debug")]
-        if let Reg16::SP = self {
-            println!("Writing 0x{:04X} to SP", val);
-        }
-        cpu.registers.write_u16(self, val)
-    }
-}
-
-impl Src<u8> for Reg8 {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        cpu.registers.read_u8(self)
-    }
-}
-
-impl Src<u16> for Reg16 {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u16 {
-        cpu.registers.read_u16(self)
-    }
-}
-
-impl Src<u8> for Imm8 {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        let value = cpu.fetch_u8();
-        #[cfg(feature = "debug")]
-        println!("Fetched value 0x{:02X} from immediate memory", value);
-        value
-    }
-}
-
-impl Src<u16> for Imm16 {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u16 {
-        let value = cpu.fetch_u16();
-        #[cfg(feature = "debug")]
-        println!("Fetched value 0x{:04X} from immediate memory", value);
-        value
-    }
-}
-
-impl Src<u8> for Mem<Reg16> {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        let Mem(reg) = self;
-        let addr = reg.read(cpu);
-        cpu.bus.read(addr)
-    }
-}
-
-impl Src<u8> for Mem<Imm16> {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        let Mem(imm) = self;
-        let addr = imm.read(cpu);
-        cpu.bus.read(addr)
-    }
-}
-
-impl Dst<u8> for Mem<Reg16> {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, val: u8) {
-        let Mem(reg) = self;
-        let addr = reg.read(cpu);
-        cpu.bus.write(addr, val);
-    }
-}
-
-impl Dst<u16> for Mem<Imm16> {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, val: u16) {
-        let Mem(loc) = self;
-        let addr = loc.read(cpu);
-        let (msb, lsb) = word_to_bytes(val);
-        cpu.bus.write(addr, lsb);
-        cpu.bus.write(addr + 1, msb);
-    }
-}
-
-impl Dst<u8> for Mem<Imm16> {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, value: u8) {
-        let Mem(loc) = self;
-
-        let addr = loc.read(cpu);
-        cpu.bus.write(addr, value);
-    }
-}
-
-impl Src<u8> for DMem<Reg8> {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        let DMem(reg) = self;
-        let addr = reg.read(cpu) as u16;
-        cpu.bus.read(0xFF00 + addr)
-    }
-}
-
-impl Src<u8> for DMem<Imm8> {
-    #[inline(always)]
-    fn read(self, cpu: &mut Cpu) -> u8 {
-        let DMem(imm) = self;
-        let addr = imm.read(cpu) as u16;
-        cpu.bus.read(0xFF00 + addr)
-    }
-}
-
-impl Dst<u8> for DMem<Reg8> {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, value: u8) {
-        let DMem(reg) = self;
-        let addr = reg.read(cpu) as u16;
-        cpu.bus.write(0xFF00 + addr, value);
-    }
-}
-
-impl Dst<u8> for DMem<Imm8> {
-    #[inline(always)]
-    fn write(self, cpu: &mut Cpu, value: u8) {
-        let DMem(imm) = self;
-        let addr = imm.read(cpu) as u16;
-        cpu.bus.write(0xFF00 + addr, value);
-    }
-}
 
 /// What the CPU is doing between instructions. HALT, a speed-switch pause and
 /// STOP are all "the CPU is inert while devices keep going"; they differ only
@@ -178,9 +28,9 @@ enum Mode {
 }
 
 pub struct Cpu {
-    pub registers: Registers,
+    pub registers: RefCell<Registers>,
     bus: CpuBus,
-    ime: bool,
+    ime: Cell<bool>,
     clock: Rc<Clock>,
     clock_control: ClockControl,
     mode: Mode,
@@ -189,13 +39,17 @@ pub struct Cpu {
 impl Cpu {
     pub fn new(bus: CpuBus, clock: Rc<Clock>, clock_control: ClockControl, is_cgb: bool) -> Cpu {
         Cpu {
-            registers: Registers::new(is_cgb),
+            registers: RefCell::new(Registers::new(is_cgb)),
             bus,
-            ime: true,
+            ime: Cell::new(true),
             clock,
             clock_control,
             mode: Mode::Running,
         }
+    }
+
+    pub fn registers_mut(&self) -> RefMut<'_, Registers> {
+        self.registers.borrow_mut()
     }
 
     pub fn halt(&mut self) {
@@ -289,7 +143,7 @@ impl Cpu {
             }
             Mode::Running => (),
         }
-        if !self.ime {
+        if !self.ime.get() {
             return 0;
         }
         let value = interrupt_controller.consume();
@@ -305,42 +159,134 @@ impl Cpu {
         self.spend(20)
     }
 
-    pub fn set_interrupts(&mut self, active: bool) {
-        self.ime = active;
+    pub fn set_interrupts(&self, active: bool) {
+        self.ime.set(active);
     }
 
-    fn interrupt(&mut self, value: u8) {
+    fn interrupt(&self, value: u8) {
+        let mut registers = self.registers_mut();
         self.set_interrupts(false);
         for _ in 0..M_CYCLE {
             self.clock.tick();
         }
-        self.push_u16(self.registers.pc);
-        self.registers.pc = value as u16;
+        self.push_u16(registers.pc);
+        registers.pc = value as u16;
+    }
+
+    /// Read the operands, apply, write back — under one borrow, and never one
+    /// held across an `.await`.
+    ///
+    /// The operands are read into locals first so that `&mut registers.f` is
+    /// the only outstanding borrow when `op` runs. Snapshotting `registers.f`
+    /// into a local instead compiles, because `Flags` is `Copy`, and silently
+    /// throws away every flag the operation sets.
+    pub fn alu(&self, register: Reg8, op: impl FnOnce(&mut Flags, u8) -> u8) {
+        let mut registers = self.registers_mut();
+        let value = registers.read_u8(register);
+        let result = op(&mut registers.f, value);
+        registers.write_u8(register, result);
+    }
+
+    pub fn alu2(&self, dst: Reg8, src: Reg8, op: impl FnOnce(&mut Flags, u8, u8) -> u8) {
+        let mut registers = self.registers_mut();
+        let (a, b) = (registers.read_u8(dst), registers.read_u8(src));
+        let result = op(&mut registers.f, a, b);
+        registers.write_u8(dst, result);
+    }
+
+    pub fn alu16(&self, register: Reg16, op: impl FnOnce(&mut Flags, u16) -> u16) {
+        let mut registers = self.registers_mut();
+        let value = registers.read_u16(register);
+        let result = op(&mut registers.f, value);
+        registers.write_u16(register, result);
+    }
+
+    pub fn alu16_2(
+        &self,
+        dst: Reg16,
+        a: Reg16,
+        b: Reg16,
+        op: impl FnOnce(&mut Flags, u16, u16) -> u16,
+    ) {
+        let mut registers = self.registers_mut();
+        let (a, b) = (registers.read_u16(a), registers.read_u16(b));
+        let result = op(&mut registers.f, a, b);
+        registers.write_u16(dst, result);
+    }
+
+    /// The mixed-width one, for `add sp,r8` and `ld hl,sp+r8`. `dst` is
+    /// explicit because `ld hl,sp+r8` is the one instruction whose destination
+    /// is not among its sources.
+    pub fn alu16_8(
+        &self,
+        dst: Reg16,
+        a: Reg16,
+        b: Reg8,
+        op: impl FnOnce(&mut Flags, u16, u8) -> u16,
+    ) {
+        let mut registers = self.registers_mut();
+        let (a, b) = (registers.read_u16(a), registers.read_u8(b));
+        let result = op(&mut registers.f, a, b);
+        registers.write_u16(dst, result);
+    }
+
+    pub fn mov(&self, dst: Reg8, src: Reg8) {
+        let mut registers = self.registers_mut();
+        let val = registers.read_u8(src);
+        registers.write_u8(dst, val);
+    }
+
+    pub fn mov16(&self, dst: Reg16, src: Reg16) {
+        let mut registers = self.registers_mut();
+        let val = registers.read_u16(src);
+        registers.write_u16(dst, val);
+    }
+
+    /// `bit b,r` — one register in, flags out, nothing written back. The bit
+    /// index rides in the closure, since it comes from the opcode rather than
+    /// the register file.
+    pub fn test(&self, register: Reg8, op: impl FnOnce(&mut Flags, u8)) {
+        let mut registers = self.registers_mut();
+        let value = registers.read_u8(register);
+        op(&mut registers.f, value);
+    }
+
+    /// `cp` — two registers in, neither written.
+    pub fn test2(&self, left: Reg8, right: Reg8, op: impl FnOnce(&mut Flags, u8, u8)) {
+        let mut registers = self.registers_mut();
+        let (a, b) = (registers.read_u8(left), registers.read_u8(right));
+        op(&mut registers.f, a, b);
+    }
+
+    pub fn flags(&self, op: impl FnOnce(&mut Flags)) {
+        op(&mut self.registers_mut().f)
     }
 
     #[inline(always)]
-    pub fn fetch_u8(&mut self) -> u8 {
-        let pc = self.registers.pc;
-        self.registers.pc = pc.wrapping_add(1);
+    pub fn fetch_u8(&self) -> u8 {
+        let mut registers = self.registers_mut();
+        let pc = registers.pc;
+        registers.pc = pc.wrapping_add(1);
         self.bus.read(pc)
     }
 
     #[inline(always)]
-    pub fn fetch_u16(&mut self) -> u16 {
+    pub fn fetch_u16(&self) -> u16 {
         let lsb = self.fetch_u8();
         let msb = self.fetch_u8();
         bytes_to_word(msb, lsb)
     }
 
     #[inline(always)]
-    pub fn push_u8(&mut self, value: u8) {
-        let new_sp = self.registers.sp.wrapping_sub(1);
-        self.registers.sp = new_sp;
+    pub fn push_u8(&self, value: u8) {
+        let mut registers = self.registers_mut();
+        let new_sp = registers.sp.wrapping_sub(1);
+        registers.sp = new_sp;
         self.bus.write(new_sp, value);
     }
 
     #[inline(always)]
-    pub fn push_u16(&mut self, value: u16) {
+    pub fn push_u16(&self, value: u16) {
         for _ in 0..M_CYCLE {
             self.clock.tick();
         }
@@ -351,8 +297,9 @@ impl Cpu {
 
     #[inline(always)]
     pub fn pop_u8(&mut self) -> u8 {
-        let sp = self.registers.sp;
-        self.registers.sp = sp.wrapping_add(1);
+        let mut registers = self.registers_mut();
+        let sp = registers.sp;
+        registers.sp = sp.wrapping_add(1);
         self.bus.read(sp)
     }
 

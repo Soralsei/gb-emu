@@ -275,13 +275,14 @@ because the first two *can* be fixed and the rest cannot.
 the two cases needing separation arrive identically:
 
 ```
-fetch_u8()             -> self.bus.read(pc)  -> CpuBus::read -> Mmu::peek(addr)
-Mem(Reg16::HL).read()  -> cpu.bus.read(addr) -> CpuBus::read -> Mmu::peek(addr)
+cpu.fetch(Reg8::Z)        -> bus.read(pc)   -> CpuBus::read -> Mmu::peek(addr)
+cpu.load(Reg8::Z, addr)   -> bus.read(addr) -> CpuBus::read -> Mmu::peek(addr)
 ```
 
-**Operand bytes** — fixable. `Imm8::read` calls `fetch_u8`, so `jp $0150` reads
-`0x0151` and `0x0152` too. Restricting the frontend to set breakpoints only on
-instruction boundaries, which the trace bitmap already knows, removes this.
+**Operand bytes** — fixable. An operand fetch is a `fetch` like any other, so
+`jp $0150` reads `0x0151` and `0x0152` too. Restricting the frontend to set
+breakpoints only on instruction boundaries, which the trace bitmap already knows,
+removes this.
 
 **The debugger's own reads** — fixable, by the `suspended` guard above.
 
@@ -312,8 +313,8 @@ state at instruction boundaries covers the WX and palette work.
 
 ### If the CPU becomes a task too
 
-`ASYNC_CLOCK.md` puts the CPU last, gated on the direction inversion in
-`codegen/MICRO_OPS.md`. If that lands, `System::step` survives — it stops being
+`ASYNC_CLOCK.md` §"The CPU as a task" puts the CPU last, with
+`codegen/DISPATCH.md`. If that lands, `System::step` survives — it stops being
 "run one instruction" and becomes "advance the clock" — but a tick boundary is
 no longer an instruction boundary. Mid-instruction the PC has already walked past
 the opcode and operand bytes, so checking `pc()` on an arbitrary tick fires on
@@ -401,7 +402,6 @@ pub struct Instruction {
     pub operator: &'static str,          // "ld"
     pub operands: &'static [Operand],
     pub size: u8,
-    pub execute: fn(&mut Cpu) -> Timing,
 }
 ```
 
@@ -409,6 +409,15 @@ pub struct Instruction {
 static promotion. The runtime enum mirrors `codegen::types::Operand` one to one,
 so the generator work is a third emitter trait beside `MnemonicEmitter` and
 `RustEmitter`, in the same shape as the two that exist.
+
+No `execute` field: under `codegen/DISPATCH.md` the executable half of the
+generated file is an `async fn` with a `match`, not a table of function pointers.
+That is the better shape here anyway — with nothing but data left, `Instruction`
+is fully const and the lookup becomes `UNPREFIXED[op]` rather than a match
+returning by value, which is what a panel disassembling a few hundred
+instructions per repaint wants. Note the operands stay in the yaml's vocabulary:
+`(hl)` and `d8` render as `(hl)` and `$93` regardless of the `W`/`Z` latches
+execution lowers them to.
 
 ### Rendering
 

@@ -288,7 +288,7 @@ impl Instruction {
             0x27 => Instruction {
                 cycles: Cycles::Unconditional(4),
                 mnemonic: "daa",
-                execute: |cpu: &mut Cpu| daa(cpu),
+                execute: |cpu: &mut Cpu| da(cpu),
             },
             0x28 => Instruction {
                 cycles: Cycles::Conditional(ConditionCycles {
