@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use crate::clock::{Clock, M_CYCLE};
+use crate::clock::M_CYCLE;
 use crate::memory::mmu::Mmu;
 
 #[derive(Debug, Clone, Copy)]
@@ -80,22 +80,17 @@ impl BusController {
 pub struct CpuBus {
     mmu: Rc<Mmu>,
     bus_controller: Rc<BusController>,
-    clock: Rc<Clock>,
 }
 
 impl CpuBus {
-    pub fn new(mmu: Rc<Mmu>, bus_controller: Rc<BusController>, clock: Rc<Clock>) -> Self {
+    pub fn new(mmu: Rc<Mmu>, bus_controller: Rc<BusController>) -> Self {
         Self {
             mmu,
             bus_controller,
-            clock,
         }
     }
 
     pub fn read(&self, address: u16) -> u8 {
-        for _ in 0..M_CYCLE {
-            self.clock.tick();
-        }
         match self.bus_controller.conflict(address) {
             // Whoever owns the bus is driving it; the CPU sees their value.
             Some(conflict) => conflict,
@@ -104,15 +99,12 @@ impl CpuBus {
     }
 
     pub fn write(&self, address: u16, value: u8) {
-        for _ in 0..M_CYCLE {
-            self.clock.tick();
-        }
         if self.bus_controller.conflict(address).is_none() {
             self.mmu.poke(address, value);
         }
     }
 
-    /// Inspect without a bus cycle and without arbitration, for the places the
+    /// Inspect without arbitration, for the places the
     /// CPU reads state rather than driving the bus (STOP checking IE/IF/JOYP).
     pub fn peek(&self, address: u16) -> u8 {
         self.mmu.peek(address)

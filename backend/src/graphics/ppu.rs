@@ -599,30 +599,30 @@ impl MemoryHandler for Ppu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::{Clock, Domain};
+    use crate::clock::Time;
     use crate::cpu::interrupt::InterruptController;
     use crate::memory::bus::BusController;
 
     /// Drives the PPU alone, with no CPU: registers and VRAM are poked
     /// directly, so a failure is in the pixel pipeline and nowhere else.
     struct Harness {
-        clock: Rc<Clock>,
+        time: Time,
         ppu: Rc<Ppu>,
         _interrupts: Rc<InterruptController>,
     }
 
     impl Harness {
         fn new() -> Self {
-            let clock = Clock::new();
+            let time = Time::new();
             let interrupts = Rc::new(InterruptController::new());
             let ppu = Rc::new(Ppu::new(
                 interrupts.request(),
                 Rc::new(BusController::new()),
                 false,
             ));
-            clock.spawn(Domain::Fixed, |timeline| Ppu::task(ppu.clone(), timeline));
+            time.spawn(Ppu::task(ppu.clone(), time.fixed.timeline()));
             Self {
-                clock,
+                time,
                 ppu,
                 _interrupts: interrupts,
             }
@@ -639,7 +639,7 @@ mod tests {
         /// One full frame is 154 lines of 456 dots.
         fn run_frame(&self) {
             for _ in 0..(70224) {
-                self.clock.tick();
+                self.time.tick();
             }
         }
     }

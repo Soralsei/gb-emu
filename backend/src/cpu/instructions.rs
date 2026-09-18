@@ -26,18 +26,6 @@ pub enum Condition {
     Carry,
 }
 
-impl Condition {
-    pub fn eval(&self, cpu: &Cpu) -> bool {
-        match self {
-            Condition::Unconditional => true,
-            Condition::NotZero => !cpu.registers.f.zero,
-            Condition::Zero => cpu.registers.f.zero,
-            Condition::NotCarry => !cpu.registers.f.carry,
-            Condition::Carry => cpu.registers.f.carry,
-        }
-    }
-}
-
 #[derive(PartialEq)]
 pub struct ConditionCycles {
     pub not_taken: usize,

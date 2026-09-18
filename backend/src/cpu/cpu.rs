@@ -1,185 +1,246 @@
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::convert::Infallible;
 use std::rc::Rc;
 
-use super::instructions::{Instruction, Opcode, Timing};
-use super::interrupt::InterruptController;
 use super::registers::Registers;
-use crate::clock::{Clock, ClockControl, M_CYCLE};
-use crate::cpu::instructions::Cycles;
+use crate::clock::{CpuClock, FixedClock, Timeline, M_CYCLE};
+use crate::cpu::instructions::Condition;
+use crate::cpu::interrupt::InterruptController;
 use crate::cpu::registers::{Flags, Reg16, Reg8};
 use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
 
-/// What the CPU is doing between instructions. HALT, a speed-switch pause and
-/// STOP are all "the CPU is inert while devices keep going"; they differ only
-/// in what ends them and which devices advance meanwhile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Running,
-    /// HALT: resumes when an enabled interrupt is pending.
-    Halted,
-    /// STOP with a speed switch armed: the CPU is inert for a fixed span and
-    /// DIV is frozen, but the PPU keeps running.
-    SwitchStalled {
-        remaining: u16,
-    },
-    /// STOP with no switch armed: only a joypad press resumes.
-    Stopped,
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum Ime {
+    #[default]
+    Disabled,
+    Pending,
+    Enabled,
 }
 
 pub struct Cpu {
     pub registers: RefCell<Registers>,
-    bus: CpuBus,
-    ime: Cell<bool>,
-    clock: Rc<Clock>,
-    clock_control: ClockControl,
-    mode: Mode,
+    instr: Cell<u64>,
+    halted: Cell<bool>,
+    halt_bug: Cell<bool>,
+    ime: Cell<Ime>,
+}
+
+impl Condition {
+    pub fn eval(&self, flags: &Flags) -> bool {
+        match self {
+            Condition::Unconditional => true,
+            Condition::NotZero => !flags.zero,
+            Condition::Zero => flags.zero,
+            Condition::NotCarry => !flags.carry,
+            Condition::Carry => flags.carry,
+        }
+    }
 }
 
 impl Cpu {
-    pub fn new(bus: CpuBus, clock: Rc<Clock>, clock_control: ClockControl, is_cgb: bool) -> Cpu {
+    pub fn new(is_cgb: bool) -> Cpu {
         Cpu {
             registers: RefCell::new(Registers::new(is_cgb)),
+            ime: Cell::new(Ime::Disabled),
+            instr: Cell::new(0),
+            halted: Cell::new(false),
+            halt_bug: Cell::new(false),
+        }
+    }
+
+    pub async fn task(
+        cpu: Rc<Cpu>,
+        irq: Rc<InterruptController>,
+        bus: CpuBus,
+        clock: Rc<CpuClock>,
+        fixed_clock: Rc<FixedClock>,
+    ) -> Infallible {
+        let task = CpuTask {
+            t: clock.timeline(),
+            fixed: fixed_clock.timeline(),
+            cpu,
+            irq,
             bus,
-            ime: Cell::new(true),
             clock,
-            clock_control,
-            mode: Mode::Running,
-        }
-    }
-
-    pub fn registers_mut(&self) -> RefMut<'_, Registers> {
-        self.registers.borrow_mut()
-    }
-
-    pub fn halt(&mut self) {
-        self.mode = Mode::Halted;
-    }
-
-    /// In STOP mode no time passes, so a caller driving the machine by a cycle
-    /// budget has to stop asking rather than wait for cycles that never come.
-    pub fn is_stopped(&self) -> bool {
-        self.mode == Mode::Stopped
-    }
-
-    /// Tick the cycles this unit of work needs on top of the ones its bus
-    /// accesses already ticked, then start counting the next one.
-    fn spend(&mut self, total_cycles: usize) -> usize {
-        let elapsed = self.clock.elapsed();
-        for _ in 0..(total_cycles as u64).saturating_sub(elapsed) {
-            self.clock.tick();
-        }
-        self.clock.reset();
-        elapsed.max(total_cycles as u64) as usize
-    }
-
-    pub fn execute_instruction(&mut self) -> usize {
-        match self.mode {
-            // DIV is frozen for the duration, so this cannot go through
-            // `spend`: only the fixed-rate devices advance.
-            Mode::SwitchStalled { remaining } => {
-                let step = M_CYCLE.min(remaining);
-                for _ in 0..step {
-                    self.clock.tick_fixed();
-                }
-                // `spend` tops up against `elapsed`, so the next instruction
-                // must not be credited with the pause.
-                self.clock.reset();
-                self.mode = match remaining - step {
-                    0 => Mode::Running,
-                    left => Mode::SwitchStalled { remaining: left },
-                };
-                return step as usize;
-            }
-            // The CPU is inert but the clock keeps running, so a halt still
-            // costs time and lets the devices that wake it advance.
-            Mode::Halted => {
-                self.spend(M_CYCLE as usize);
-                return M_CYCLE as usize;
-            }
-            // STOP mode stops the main clock: no device advances and no time
-            // passes. Only a joypad press leaves it, via `resume`.
-            Mode::Stopped => return 0,
-            Mode::Running => (),
-        }
-
-        let opcode = self.fetch_u8();
-        let op = match opcode {
-            0xCB => Opcode::Prefixed(self.fetch_u8()),
-            _ => Opcode::Unprefixed(opcode),
+            fixed_clock,
         };
-        let instruction = Instruction::from_opcode(op);
-
-        #[cfg(feature = "debug")]
-        {
-            println!(
-                "Executing {} at address 0x{:04X}",
-                instruction.mnemonic,
-                self.registers.pc - 1
-            );
+        loop {
+            task.step().await
         }
-        let timing = (instruction.execute)(self);
-
-        let cycles = match &instruction.cycles {
-            Cycles::Unconditional(cycles) => *cycles,
-            Cycles::Conditional(condition_cycles) => match timing {
-                Timing::Normal => condition_cycles.not_taken,
-                Timing::Conditional => condition_cycles.taken,
-            },
-        };
-        self.spend(cycles)
     }
 
-    pub fn handle_interrupts(&mut self, interrupt_controller: &InterruptController) -> usize {
-        match self.mode {
-            // Neither form of STOP is left by an interrupt: the pause runs to
-            // its own end, and STOP mode waits on the joypad.
-            Mode::Stopped | Mode::SwitchStalled { .. } => return 0,
-            // TODO: implement halt bug
-            Mode::Halted => {
-                if interrupt_controller.peek().is_some() {
-                    self.mode = Mode::Running;
-                }
-            }
-            Mode::Running => (),
-        }
-        if !self.ime.get() {
-            return 0;
-        }
-        let value = interrupt_controller.consume();
-        let value = match value {
-            Some(val) => val,
-            None => return 0,
-        };
-        self.interrupt(value);
-        self.mode = Mode::Running;
-
-        // interrupt handling always consumes exactly 20 cycles.
-        // Share the 20 cycles base with potential bus cycles
-        self.spend(20)
+    pub fn instr_count(&self) -> u64 {
+        self.instr.get()
     }
 
-    pub fn set_interrupts(&self, active: bool) {
+    pub fn halt(&self) {
+        self.halted.set(true);
+    }
+
+    pub fn set_ime(&self, active: Ime) {
         self.ime.set(active);
     }
+}
 
-    fn interrupt(&self, value: u8) {
-        let mut registers = self.registers_mut();
-        self.set_interrupts(false);
-        for _ in 0..M_CYCLE {
-            self.clock.tick();
+pub struct CpuTask {
+    cpu: Rc<Cpu>,
+    irq: Rc<InterruptController>,
+    bus: CpuBus,
+    clock: Rc<CpuClock>,
+    fixed_clock: Rc<FixedClock>,
+    t: Timeline,
+    fixed: Timeline,
+}
+
+impl CpuTask {
+    pub async fn step(&self) {
+        if self.cpu.halted.get() {
+            if self.cpu.ime.get() == Ime::Disabled && self.irq.peek().is_some() {
+                // halt bug: PC fails to increment, next byte executes twice
+                self.cpu.halt_bug.set(true);
+            } else {
+                while self.irq.peek().is_none() {
+                    self.idle().await
+                }
+            }
+            self.cpu.halted.set(false);
         }
-        self.push_u16(registers.pc);
-        registers.pc = value as u16;
+
+        if self.cpu.ime.get() == Ime::Enabled {
+            if let Some(vector) = self.irq.consume() {
+                self.service(vector).await;
+            }
+        }
+
+        if self.cpu.ime.get() == Ime::Pending {
+            self.cpu.ime.set(Ime::Enabled);
+        }
+
+        self.execute().await;
     }
 
-    /// Read the operands, apply, write back — under one borrow, and never one
-    /// held across an `.await`.
-    ///
-    /// The operands are read into locals first so that `&mut registers.f` is
-    /// the only outstanding borrow when `op` runs. Snapshotting `registers.f`
-    /// into a local instead compiles, because `Flags` is `Copy`, and silently
-    /// throws away every flag the operation sets.
+    async fn execute(&self) {
+        self.fetch(Reg8::Z).await;
+        let opcode = self.registers().z;
+        match opcode {
+            0xCB => {
+                self.fetch(Reg8::Z).await;
+                let opcode = self.registers().z;
+                execute_prefixed(self, opcode).await;
+            }
+            _ => execute_unprefixed(self, opcode).await,
+        }
+        self.cpu.instr.set(self.cpu.instr.get() + 1);
+    }
+
+    async fn service(&self, vector: u8) {
+        self.idle().await;
+        self.idle().await;
+
+        let pc = self.registers().pc;
+        let (msb, lsb) = word_to_bytes(pc);
+
+        self.push(msb).await;
+        self.push(lsb).await;
+
+        self.cpu.ime.set(Ime::Disabled);
+
+        self.registers_mut().pc = vector as u16;
+
+        self.idle().await;
+    }
+
+    fn registers_mut(&self) -> RefMut<'_, Registers> {
+        self.cpu.registers.borrow_mut()
+    }
+
+    fn registers(&self) -> Ref<'_, Registers> {
+        self.cpu.registers.borrow()
+    }
+
+    pub async fn fetch(&self, dst: Reg8) {
+        self.t.wait(M_CYCLE).await;
+
+        let mut registers = self.registers_mut();
+        let pc = registers.pc;
+        registers.write_u8(dst, self.bus.read(pc));
+
+        if !self.cpu.halt_bug.take() {
+            registers.pc = registers.pc.wrapping_add(1);
+        }
+    }
+
+    pub async fn load(&self, dst: Reg8, addr: u16) {
+        self.t.wait(M_CYCLE).await;
+
+        self.registers_mut().write_u8(dst, self.bus.read(addr));
+    }
+
+    pub async fn store(&self, address: u16, src: Reg8) {
+        self.t.wait(M_CYCLE).await;
+
+        self.bus.write(address, self.registers().read_u8(src));
+    }
+
+    pub async fn store16(&self, addr: u16, src: Reg16) {
+        let (msb, lsb) = word_to_bytes(self.registers().read_u16(src));
+
+        self.t.wait(M_CYCLE).await;
+        self.bus.write(addr, lsb);
+
+        self.t.wait(M_CYCLE).await;
+        self.bus.write(addr.wrapping_add(1), msb);
+    }
+
+    pub async fn idle(&self) {
+        self.t.wait(M_CYCLE).await;
+    }
+
+    pub fn cond(&self, cond: Condition) -> bool {
+        cond.eval(&self.registers().f)
+    }
+
+    pub fn jump(&self, addr: u16) {
+        self.registers_mut().pc = addr;
+    }
+
+    pub async fn push(&self, value: u8) {
+        self.t.wait(M_CYCLE).await;
+
+        let mut registers = self.registers_mut();
+        let new_sp = registers.sp.wrapping_sub(1);
+        registers.sp = new_sp;
+
+        self.bus.write(new_sp, value);
+    }
+
+    pub async fn pop(&self) -> u8 {
+        self.t.wait(M_CYCLE).await;
+
+        let mut registers = self.registers_mut();
+        let sp = registers.sp;
+        registers.sp = sp.wrapping_add(1);
+
+        self.bus.read(sp)
+    }
+
+    pub async fn push16(&self, value: u16) {
+        let (msb, lsb) = word_to_bytes(value);
+        self.push(msb).await;
+        self.push(lsb).await;
+    }
+
+    pub async fn pop16(&self) -> u16 {
+        let lsb = self.pop().await;
+        let msb = self.pop().await;
+        bytes_to_word(msb, lsb)
+    }
+
+    pub fn addr(&self, src: Reg16) -> u16 {
+        self.registers().read_u16(src)
+    }
+
     pub fn alu(&self, register: Reg8, op: impl FnOnce(&mut Flags, u8) -> u8) {
         let mut registers = self.registers_mut();
         let value = registers.read_u8(register);
@@ -214,9 +275,7 @@ impl Cpu {
         registers.write_u16(dst, result);
     }
 
-    /// The mixed-width one, for `add sp,r8` and `ld hl,sp+r8`. `dst` is
-    /// explicit because `ld hl,sp+r8` is the one instruction whose destination
-    /// is not among its sources.
+    /// mixed-width one, for `add sp,r8` and `ld hl,sp+r8`. `dst` is
     pub fn alu16_8(
         &self,
         dst: Reg16,
@@ -242,7 +301,7 @@ impl Cpu {
         registers.write_u16(dst, val);
     }
 
-    /// `bit b,r` — one register in, flags out, nothing written back. The bit
+    /// `bit b,r`: one register in, flags out, nothing written back. The bit
     /// index rides in the closure, since it comes from the opcode rather than
     /// the register file.
     pub fn test(&self, register: Reg8, op: impl FnOnce(&mut Flags, u8)) {
@@ -251,7 +310,7 @@ impl Cpu {
         op(&mut registers.f, value);
     }
 
-    /// `cp` — two registers in, neither written.
+    /// `cp`: two registers in, neither written.
     pub fn test2(&self, left: Reg8, right: Reg8, op: impl FnOnce(&mut Flags, u8, u8)) {
         let mut registers = self.registers_mut();
         let (a, b) = (registers.read_u8(left), registers.read_u8(right));
@@ -262,56 +321,15 @@ impl Cpu {
         op(&mut self.registers_mut().f)
     }
 
-    #[inline(always)]
-    pub fn fetch_u8(&self) -> u8 {
-        let mut registers = self.registers_mut();
-        let pc = registers.pc;
-        registers.pc = pc.wrapping_add(1);
-        self.bus.read(pc)
+    pub fn ei(&self) {
+        self.cpu.set_ime(Ime::Pending);
     }
 
-    #[inline(always)]
-    pub fn fetch_u16(&self) -> u16 {
-        let lsb = self.fetch_u8();
-        let msb = self.fetch_u8();
-        bytes_to_word(msb, lsb)
+    pub fn di(&self) {
+        self.cpu.set_ime(Ime::Disabled);
     }
 
-    #[inline(always)]
-    pub fn push_u8(&self, value: u8) {
-        let mut registers = self.registers_mut();
-        let new_sp = registers.sp.wrapping_sub(1);
-        registers.sp = new_sp;
-        self.bus.write(new_sp, value);
-    }
-
-    #[inline(always)]
-    pub fn push_u16(&self, value: u16) {
-        for _ in 0..M_CYCLE {
-            self.clock.tick();
-        }
-        let (msb, lsb) = word_to_bytes(value);
-        self.push_u8(msb);
-        self.push_u8(lsb);
-    }
-
-    #[inline(always)]
-    pub fn pop_u8(&mut self) -> u8 {
-        let mut registers = self.registers_mut();
-        let sp = registers.sp;
-        registers.sp = sp.wrapping_add(1);
-        self.bus.read(sp)
-    }
-
-    #[inline(always)]
-    pub fn pop_u16(&mut self) -> u16 {
-        let lsb = self.pop_u8();
-        let msb = self.pop_u8();
-        bytes_to_word(msb, lsb)
-    }
-
-    pub fn stop(&mut self) {
-        eprintln!("Hit a stop instruction");
+    pub async fn stop(&self) {
         let interrupt_pending = self.bus.peek(0xFFFF) & self.bus.peek(0xFF0F) & 0x1F;
         let joyp = self.bus.peek(0xFF00) & 0x0F;
 
@@ -320,47 +338,41 @@ impl Cpu {
             // No pending interrupt
             if interrupt_pending == 0 {
                 // STOP => 2 bytes
-                let _ = self.fetch_u8();
-                self.mode = Mode::Halted;
+                self.fetch(Reg8::Z).await;
+                self.cpu.halt();
             }
             return;
         }
 
-        if self.clock_control.switch_armed() {
+        if self.clock.switch_armed() {
             if interrupt_pending == 0 {
                 // STOP => 2 bytes
-                let _ = self.fetch_u8();
+                self.fetch(Reg8::Z).await;
             }
             //     if !self.ime {
             //         // Maybe
             //         return Err(StopGlitchError);
             //     }
-            self.clock_control.reset_div();
-            self.clock_control.switch_speed();
-            // The CPU sits out the next 2050 M-cycles. Modelling it as a mode
-            // rather than one burst of cycles keeps the PPU advancing through
-            // the pause while DIV stays frozen.
-            self.mode = Mode::SwitchStalled {
-                remaining: 2050 * M_CYCLE,
-            };
+            self.clock.reset_div();
+            self.clock.switch_speed();
+            self.clock.stop();
+
+            // The CPU sits out the next 2050 M-cycles
+            self.fixed.wait(2050 * M_CYCLE).await;
+
+            self.clock.resume();
+
             return;
         }
 
         // If no pending speed switch and no JOYP currently pressed
         if interrupt_pending == 0 {
             // STOP => 2 bytes
-            let _ = self.fetch_u8();
+            let _ = self.fetch(Reg8::Z).await;
         }
         // For both, enter STOP mode and reset DIV
-        self.mode = Mode::Stopped;
-        self.clock_control.stop();
-    }
-
-    /// A joypad press leaves STOP mode. Nothing else does, and no other mode
-    /// is left this way.
-    pub fn resume(&mut self) {
-        if self.mode == Mode::Stopped {
-            self.mode = Mode::Running;
-        }
+        self.clock.reset_div();
+        self.clock.stop();
+        self.fixed_clock.stop();
     }
 }

@@ -6,14 +6,14 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 /// Length of a machine cycle, the granularity at which the CPU touches the bus.
-pub const M_CYCLE: u16 = 4;
+pub const M_CYCLE: u64 = 4;
 
 /// Absolute cycle count since power-on. Wide enough never to wrap in practice.
 pub type Cycles = u64;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 
-/// A task's view of time. Holds the clock's counter, not the `Clock` itself:
-/// the clock owns the tasks, so an `Rc<Clock>` in a task would be a cycle.
+/// A task's view of time. Holds the clock's counter, not the `Time` itself:
+/// the clock owns the tasks, so an `Rc<Time>` in a task would be a cycle.
 /// Cloning shares the position, so a helper stays on its caller's timeline.
 #[derive(Clone)]
 pub struct Timeline {
@@ -80,15 +80,6 @@ impl Future for Wait {
     }
 }
 
-/// Which clock a task runs on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Domain {
-    /// Fixed rate, unaffected by double speed. PPU and APU.
-    Fixed,
-    /// Runs twice as fast in CGB double speed. Timer, serial, OAM DMA.
-    Cpu,
-}
-
 /// Tasks never complete: `Infallible` makes that checked rather than conventional.
 struct Task(BoxFuture<Infallible>);
 
@@ -106,183 +97,196 @@ impl From<Speed> for u8 {
     }
 }
 
-#[derive(Debug)]
-struct ClockState {
-    pub now_cpu: Rc<Cell<Cycles>>,
-    pub now_fixed: Rc<Cell<Cycles>>,
-    pub div_epoch: Cell<Cycles>,
-    pub stopped: Cell<bool>,
-    pub speed: Cell<Speed>,
-    pub switch_armed: Cell<bool>,
+struct Counter {
+    now: Rc<Cell<Cycles>>,
+    stopped: Cell<bool>,
 }
 
-impl ClockState {
-    pub fn new() -> Self {
+impl Counter {
+    fn new() -> Self {
         Self {
-            now_cpu: Rc::new(Cell::new(0)),
-            now_fixed: Rc::new(Cell::new(0)),
-            div_epoch: Cell::default(),
+            now: Rc::new(Cell::new(0)),
             stopped: Cell::new(false),
-            switch_armed: Cell::new(false),
-            speed: Cell::default(),
         }
     }
+
+    fn advance(&self, n: Cycles) {
+        if !self.stopped.get() {
+            self.now.set(self.now.get() + n);
+        }
+    }
+
+    /// A task's cursor into this counter, starting where the counter is now.
+    fn timeline(&self) -> Timeline {
+        Timeline {
+            at: Rc::new(Cell::new(self.now.get())),
+            now: self.now.clone(),
+        }
+    }
+
+    fn now(&self) -> Cycles {
+        self.now.get()
+    }
+    fn stop(&self) {
+        self.stopped.set(true);
+    }
+    fn resume(&self) {
+        self.stopped.set(false);
+    }
 }
 
-pub struct ClockControl(Rc<ClockState>);
-impl ClockControl {
-    pub fn stopped(&self) -> bool {
-        self.0.stopped.get()
-    }
+/// Dot clock. Never changes rate; the PPU and APU are clocked to it.
+pub struct FixedClock(Counter);
 
-    pub fn switch_armed(&self) -> bool {
-        self.0.switch_armed.get()
+impl FixedClock {
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self(Counter::new()))
     }
-
-    pub fn speed(&self) -> Speed {
-        self.0.speed.get()
+    pub fn tick(&self) {
+        self.0.advance(1);
     }
-
-    pub fn arm(&self, value: bool) {
-        self.0.switch_armed.set(value);
+    pub fn timeline(&self) -> Timeline {
+        self.0.timeline()
     }
-
-    pub fn switch_speed(&self) {
-        let speed = match self.0.speed.get() {
-            Speed::Normal => Speed::Double,
-            Speed::Double => Speed::Normal,
-        };
-        self.0.speed.set(speed);
-        self.0.switch_armed.set(false);
-    }
-
-    pub fn key1(&self) -> u8 {
-        0x7E | (self.0.speed.get() as u8) << 7 | self.0.switch_armed.get() as u8
-    }
-
     pub fn stop(&self) {
-        self.0.stopped.set(true);
-        self.reset_div();
+        self.0.stop();
     }
-
     pub fn resume(&self) {
-        self.0.stopped.set(false);
-    }
-
-    pub fn reset_div(&self) {
-        self.0.div_epoch.set(self.0.now_cpu.get());
-    }
-
-    /// The 16-bit system counter; DIV (0xFF04) is its high byte. TIMA is a
-    /// falling-edge detector on one of its bits, and the APU frame sequencer
-    /// will be another. Derived, so STOP and double speed need no handling.
-    pub fn div(&self) -> u16 {
-        self.0.now_cpu.get().wrapping_sub(self.0.div_epoch.get()) as u16
+        self.0.resume();
     }
 }
 
-/// Drives every timed device. The CPU advances it one machine cycle per bus
-/// access rather than once per instruction, so devices observe the same
-/// intra-instruction timing the hardware does.
-///
-/// Both models run during the migration. Order is fixed — `Clocked` devices in
-/// attach order, then tasks in spawn order — and must stay that way: the
-/// savestate scheme needs the core to be bit-deterministic.
-pub struct Clock {
-    elapsed: Cell<Cycles>,
-    tasks: RefCell<Vec<Task>>,
-    state: Rc<ClockState>,
+/// CPU clock. Doubles in CGB double speed, and carries the state derived from
+/// it: the divider, and the speed switch that changes its own rate.
+pub struct CpuClock {
+    counter: Counter,
+    div_epoch: Cell<Cycles>,
+    speed: Cell<Speed>,
+    switch_armed: Cell<bool>,
 }
 
-impl Clock {
+impl CpuClock {
     pub fn new() -> Rc<Self> {
         Rc::new(Self {
-            elapsed: Cell::new(0),
-            tasks: RefCell::new(Vec::with_capacity(10)),
-            state: Rc::new(ClockState::new()),
+            counter: Counter::new(),
+            div_epoch: Cell::new(0),
+            speed: Cell::default(),
+            switch_armed: Cell::new(false),
         })
     }
 
-    pub fn clock_control(&self) -> ClockControl {
-        ClockControl(self.state.clone())
+    pub fn tick(&self) {
+        self.counter.advance(1 << self.speed.get() as u8);
+    }
+    pub fn timeline(&self) -> Timeline {
+        self.counter.timeline()
+    }
+    pub fn resume(&self) {
+        self.counter.resume();
     }
 
-    /// Attach a device task: `clock.spawn(Domain::Fixed, |t| ppu(state, t))`.
-    ///
-    /// Takes a closure, not a future, because the `Timeline` must exist first
-    /// and only the clock should mint one. Polled once here so the task reaches
-    /// its first `await` at the current cycle rather than the next tick's.
-    pub fn spawn<F, Fut>(&self, domain: Domain, task: F)
-    where
-        F: FnOnce(Timeline) -> Fut,
-        Fut: Future<Output = Infallible> + 'static,
-    {
-        let now = match domain {
-            Domain::Cpu => self.state.now_cpu.clone(),
-            Domain::Fixed => self.state.now_fixed.clone(),
-        };
-        let timeline = Timeline {
-            at: Rc::new(Cell::new(now.get())),
-            now,
-        };
+    /// STOP and the speed-switch stall both land here. Freezing the counter
+    /// freezes DIV with it, since DIV is derived from it.
+    pub fn stop(&self) {
+        self.counter.stop();
+        self.reset_div();
+    }
 
-        let mut future = Box::pin(task(timeline));
+    pub fn div(&self) -> u16 {
+        self.counter.now().wrapping_sub(self.div_epoch.get()) as u16
+    }
+    pub fn reset_div(&self) {
+        self.div_epoch.set(self.counter.now());
+    }
+
+    pub fn arm(&self, value: bool) {
+        self.switch_armed.set(value);
+    }
+    pub fn switch_armed(&self) -> bool {
+        self.switch_armed.get()
+    }
+    pub fn key1(&self) -> u8 {
+        0x7E | (self.speed.get() as u8) << 7 | self.switch_armed.get() as u8
+    }
+    pub fn switch_speed(&self) {
+        self.speed.set(match self.speed.get() {
+            Speed::Normal => Speed::Double,
+            Speed::Double => Speed::Normal,
+        });
+        self.switch_armed.set(false);
+    }
+}
+
+struct Executor {
+    tasks: RefCell<Vec<Task>>,
+}
+
+impl Executor {
+    pub fn new() -> Self {
+        Self {
+            tasks: RefCell::new(Vec::with_capacity(10)),
+        }
+    }
+
+    /// Polled once here so the task reaches its first `await` at the current
+    /// cycle rather than the next tick's.
+    pub fn spawn(&self, future: impl Future<Output = Infallible> + 'static) {
+        let mut future = Box::pin(future);
         let _ = future
             .as_mut()
             .poll(&mut Context::from_waker(Waker::noop()));
-
         self.tasks
             .try_borrow_mut()
-            .expect("Clock::spawn called from inside a task poll")
+            .expect("Executor::spawn called from inside a task poll")
             .push(Task(future));
     }
 
-    pub fn tick(&self) {
-        if self.state.stopped.get() {
-            return;
-        }
-        let shift = self.state.speed.get() as u8;
-        self.state
-            .now_cpu
-            .set(self.state.now_cpu.get() + (1 << shift));
-        self.state.now_fixed.set(self.state.now_fixed.get() + 1);
-
-        self.poll_tasks();
-    }
-
-    pub fn tick_fixed(&self) {
-        if self.state.stopped.get() {
-            return;
-        }
-        self.state.now_fixed.set(self.state.now_fixed.get() + 1);
-        self.poll_tasks();
-    }
-
-    /// Poll every task, in spawn order. No scheduling: a suspended poll costs
-    /// about what an early-returning `step` costs.
-    fn poll_tasks(&self) {
-        // Borrow held across every poll, so a task must not re-enter the clock.
+    /// Every task, in spawn order, unconditionally. Order is savestate contract.
+    pub fn poll(&self) {
         let mut tasks = self
             .tasks
             .try_borrow_mut()
-            .expect("Clock::tick re-entered from inside a task poll");
-
+            .expect("Executor::poll re-entered from inside a task poll");
         let mut cx = Context::from_waker(Waker::noop());
         for task in tasks.iter_mut() {
             let _ = task.0.as_mut().poll(&mut cx);
         }
     }
+}
 
-    pub fn elapsed(&self) -> Cycles {
-        self.elapsed.get()
+pub struct Time {
+    pub cpu: Rc<CpuClock>,
+    pub fixed: Rc<FixedClock>,
+    exec: Executor,
+}
+
+impl Time {
+    pub fn new() -> Self {
+        Self {
+            cpu: CpuClock::new(),
+            fixed: FixedClock::new(),
+            exec: Executor::new(),
+        }
+    }
+
+    pub fn tick(&self) {
+        self.fixed.tick();
+        self.cpu.tick();
+        self.exec.poll();
+    }
+
+    pub fn spawn(&self, future: impl Future<Output = Infallible> + 'static) {
+        self.exec.spawn(future);
     }
 
     pub fn resume(&self) {
-        self.state.stopped.set(false);
+        self.cpu.resume();
+        self.fixed.resume();
     }
 
-    pub fn reset(&self) {
-        self.elapsed.set(0);
+    pub fn stop(&self) {
+        self.cpu.stop();
+        self.fixed.stop();
     }
 }
 
@@ -297,23 +301,23 @@ mod tests {
         }
     }
 
-    fn clock_tick(clock: &Clock, ticks: u32) {
+    fn clock_tick(clock: &Time, ticks: u32) {
         for _ in 0..ticks {
             clock.tick();
         }
     }
 
-    fn spawn_ticker(clock: &Clock, domain: Domain, period: Cycles) -> Rc<RefCell<Vec<Cycles>>> {
+    fn spawn_ticker(clock: &Time, timeline: Timeline, period: Cycles) -> Rc<RefCell<Vec<Cycles>>> {
         let log: Rc<RefCell<Vec<Cycles>>> = Rc::new(RefCell::new(Vec::new()));
         let handle = log.clone();
-        clock.spawn(domain, move |t| ticker(t, period, handle));
+        clock.spawn(ticker(timeline, period, handle));
         log
     }
 
     #[test]
     fn does_not_wake_before_its_deadline() {
-        let clock = Clock::new();
-        let log = spawn_ticker(&clock, Domain::Fixed, 4);
+        let clock = Time::new();
+        let log = spawn_ticker(&clock, clock.fixed.timeline(), 4);
 
         clock_tick(&clock, 2);
         assert!(log.borrow().is_empty());
@@ -324,8 +328,8 @@ mod tests {
 
     #[test]
     fn catches_up_inside_one_poll() {
-        let clock = Clock::new();
-        let log = spawn_ticker(&clock, Domain::Fixed, 4);
+        let clock = Time::new();
+        let log = spawn_ticker(&clock, clock.fixed.timeline(), 4);
 
         // Three periods in one tick: three wakes, on multiples of the period.
         clock_tick(&clock, 12);
@@ -334,11 +338,11 @@ mod tests {
 
     #[test]
     fn double_speed_splits_the_domains() {
-        let clock = Clock::new();
-        let cpu = spawn_ticker(&clock, Domain::Cpu, 4);
-        let fixed = spawn_ticker(&clock, Domain::Fixed, 4);
-        let control = clock.clock_control();
-        control.switch_speed();
+        let clock = Time::new();
+        let cpu = spawn_ticker(&clock, clock.cpu.timeline(), 4);
+        let fixed = spawn_ticker(&clock, clock.fixed.timeline(), 4);
+
+        clock.cpu.switch_speed();
 
         clock_tick(&clock, 2);
         assert_eq!(*cpu.borrow(), vec![4]);
@@ -351,12 +355,13 @@ mod tests {
 
     #[test]
     fn poll_order_is_spawn_order() {
-        let clock = Clock::new();
+        let clock = Time::new();
         let order: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
 
         for id in 0..3u8 {
             let order = order.clone();
-            clock.spawn(Domain::Fixed, move |t| async move {
+            let t = clock.fixed.timeline();
+            clock.spawn(async move {
                 loop {
                     t.wait(4).await;
                     order.borrow_mut().push(id);
@@ -370,30 +375,28 @@ mod tests {
 
     #[test]
     fn div_is_derived_and_resettable() {
-        let clock = Clock::new();
-        let control = clock.clock_control();
+        let clock = Time::new();
 
         clock_tick(&clock, 0x120);
-        assert_eq!(control.div(), 0x120);
+        assert_eq!(clock.cpu.div(), 0x120);
 
-        control.reset_div();
-        assert_eq!(control.div(), 0);
+        clock.cpu.reset_div();
+        assert_eq!(clock.cpu.div(), 0);
 
         clock_tick(&clock, 8);
-        assert_eq!(control.div(), 8);
+        assert_eq!(clock.cpu.div(), 8);
     }
 
     #[test]
     fn stopped_clock_advances_nothing() {
-        let clock = Clock::new();
-        let log = spawn_ticker(&clock, Domain::Fixed, 4);
-        let control = clock.clock_control();
+        let clock = Time::new();
+        let log = spawn_ticker(&clock, clock.cpu.timeline(), 4);
 
-        control.stop();
+        clock.cpu.stop();
         clock_tick(&clock, 16);
         assert!(log.borrow().is_empty());
 
-        control.resume();
+        clock.cpu.resume();
         clock_tick(&clock, 4);
         assert_eq!(*log.borrow(), vec![4]);
     }

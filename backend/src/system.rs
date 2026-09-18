@@ -1,7 +1,7 @@
 use std::cell::Ref;
 use std::rc::Rc;
 
-use crate::clock::{Clock, ClockControl, Domain};
+use crate::clock::{CpuClock, Time};
 use crate::graphics::oam::DMAController;
 use crate::graphics::ppu::{Frame, Ppu};
 use crate::input::{Button, JoypadHandler};
@@ -23,17 +23,15 @@ const CYCLES_PER_FRAME: u32 = 70224; // 154 lines * 456 T-cycles
 
 /// KEY1 (0xFF4D). Both meaningful bits — current speed and the armed switch —
 /// are clock state, so the handler is a pure view onto `Clock`.
-struct SpeedSwitch(ClockControl);
+struct SpeedSwitch(Rc<CpuClock>);
 
 impl MemoryHandler for SpeedSwitch {
-    fn read(&self, _mmu: &Mmu, _address: u16) -> MemoryRead {
+    fn read(&self, _: &Mmu, _address: u16) -> MemoryRead {
         MemoryRead::Replace(self.0.key1())
     }
 
-    fn write(&self, _mmu: &Mmu, _address: u16, value: u8) -> MemoryWrite {
+    fn write(&self, _: &Mmu, _address: u16, value: u8) -> MemoryWrite {
         self.0.arm(value & 1 != 0);
-        // The handler is authoritative: keep the raw backing store out of it,
-        // otherwise a stale byte shadows `Clock::key1`.
         MemoryWrite::Block
     }
 }
@@ -50,25 +48,25 @@ impl MemoryHandler for Unmapped {
 }
 
 pub struct System {
-    cpu: Cpu,
+    cpu: Rc<Cpu>,
     ppu: Rc<Ppu>,
-    clock: Rc<Clock>,
+    time: Time,
     interrupt_controller: Rc<InterruptController>,
     joypad: Rc<JoypadHandler>,
 }
 
 impl System {
     pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>, is_cgb_override: bool) -> Self {
+        let time = Time::new();
+
         let mbc = Rc::new(Mbc::new(boot_rom, rom));
         let is_cgb = mbc.cartridge().is_cgb_only() || is_cgb_override;
-
-        let clock = Clock::new();
 
         let interrupt_controller = Rc::new(InterruptController::new());
         let serial = Rc::new(Serial::new(interrupt_controller.request(), LogSink));
         let timer = Rc::new(Timer::new(
             interrupt_controller.request(),
-            clock.clock_control(),
+            time.cpu.clone(),
             is_cgb,
         ));
         let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
@@ -78,12 +76,7 @@ impl System {
         let mmu = Rc::new(Mmu::new());
         let bus_controller = Rc::new(BusController::new());
 
-        let cpu = Cpu::new(
-            CpuBus::new(mmu.clone(), bus_controller.clone(), clock.clone()),
-            clock.clone(),
-            clock.clock_control(),
-            is_cgb,
-        );
+        let cpu = Rc::new(Cpu::new(is_cgb));
         let ppu = Rc::new(Ppu::new(
             interrupt_controller.request(),
             bus_controller.clone(),
@@ -91,14 +84,17 @@ impl System {
         ));
         let dma = Rc::new(DMAController::new(mmu.clone(), bus_controller.clone()));
 
-        clock.spawn(Domain::Fixed, |timeline| Ppu::task(ppu.clone(), timeline));
-        clock.spawn(Domain::Cpu, |timeline| {
-            Serial::task(serial.clone(), timeline)
-        });
-        clock.spawn(Domain::Cpu, |timeline| {
-            DMAController::task(dma.clone(), timeline)
-        });
-        clock.spawn(Domain::Cpu, |timeline| Timer::task(timer.clone(), timeline));
+        time.spawn(Ppu::task(ppu.clone(), time.fixed.timeline()));
+        time.spawn(Serial::task(serial.clone(), time.cpu.timeline()));
+        time.spawn(DMAController::task(dma.clone(), time.cpu.timeline()));
+        time.spawn(Timer::task(timer.clone(), time.cpu.timeline()));
+        time.spawn(Cpu::task(
+            cpu.clone(),
+            interrupt_controller.clone(),
+            CpuBus::new(mmu.clone(), bus_controller.clone()),
+            time.cpu.clone(),
+            time.fixed.clone(),
+        ));
 
         #[cfg(feature = "blaarg")]
         {
@@ -128,10 +124,7 @@ impl System {
 
         mmu.add_handler((0xFF0F, 0xFF0F), interrupt_controller.clone());
         if is_cgb {
-            mmu.add_handler(
-                (0xFF4D, 0xFF4D),
-                Rc::new(SpeedSwitch(clock.clock_control())),
-            );
+            mmu.add_handler((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(time.cpu.clone())));
             // TODO: map other IO registers in the CGB
         } else {
             let unmapped = Rc::new(Unmapped);
@@ -146,25 +139,23 @@ impl System {
         Self {
             cpu,
             ppu,
-            clock,
+            time,
             interrupt_controller,
             joypad,
         }
     }
 
-    pub fn step(&mut self) -> usize {
-        let mut elapsed = self.cpu.execute_instruction();
-        elapsed += self.cpu.handle_interrupts(&self.interrupt_controller);
-        elapsed
+    pub fn step(&mut self) {
+        let mark = self.cpu.instr_count();
+        while self.cpu.instr_count() == mark {
+            self.time.tick();
+        }
     }
 
     pub fn run_frame(&mut self) {
-        let mut cycle_budget = CYCLES_PER_FRAME * 2;
-        loop {
-            cycle_budget = cycle_budget.saturating_sub(self.step() as u32);
-            // STOP mode burns no cycles, so the budget would never drain. Hand
-            // the frame back so the frontend can poll the joypad that ends it.
-            if self.cpu.is_stopped() || self.ppu.take_frame_ready() || cycle_budget == 0 {
+        for _ in 0..(CYCLES_PER_FRAME * 2) {
+            self.time.tick();
+            if self.ppu.take_frame_ready() {
                 break;
             }
         }
@@ -176,8 +167,7 @@ impl System {
 
     pub fn set_button(&mut self, btn: Button, down: bool) {
         if self.joypad.set(btn, down) {
-            self.clock.resume();
-            self.cpu.resume();
+            self.time.resume();
         }
     }
 }

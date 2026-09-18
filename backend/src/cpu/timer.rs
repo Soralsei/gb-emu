@@ -2,7 +2,7 @@ use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use super::interrupt::InterruptRequest;
 use crate::{
-    clock::{ClockControl, Cycles, Timeline, M_CYCLE},
+    clock::{CpuClock, Cycles, Timeline, M_CYCLE},
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
 };
@@ -13,14 +13,15 @@ const TIMA_PERIODS: [u16; 4] = [1024, 16, 64, 256];
 /// handler, which never nest, so one cell at the device boundary is enough and
 /// all of the logic below keeps plain `&mut self`.
 pub struct Timer {
+    clock: Rc<CpuClock>,
     state: RefCell<TimerState>,
 }
 
 impl Timer {
-    pub fn new(interrupt_request: InterruptRequest, clock: ClockControl, is_cgb: bool) -> Self {
+    pub fn new(interrupt_request: InterruptRequest, clock: Rc<CpuClock>, is_cgb: bool) -> Self {
         Self {
+            clock,
             state: RefCell::new(TimerState {
-                clock,
                 interrupt_request,
                 tima: 0,
                 tma: 0,
@@ -35,14 +36,13 @@ impl Timer {
         loop {
             timeline.wait(M_CYCLE as Cycles).await;
             let mut state = this.state.borrow_mut();
-            let counter = state.clock.div();
+            let counter = this.clock.div();
             state.advance_to(counter);
         }
     }
 }
 
 struct TimerState {
-    clock: ClockControl,
     interrupt_request: InterruptRequest,
     tima: u8, // address 0xFF05
     tma: u8,  // address 0xFF06
@@ -68,7 +68,7 @@ impl TimerState {
             self.overflowed = false;
             self.interrupt_request.timer(true);
         }
-        self.state_change(counter.wrapping_sub(M_CYCLE), counter, self.tac);
+        self.state_change(counter.wrapping_sub(M_CYCLE as u16), counter, self.tac);
     }
 
     /// Sample the selected bit either side of a change to the counter or TAC.
@@ -110,7 +110,14 @@ impl TimerState {
 
 impl MemoryHandler for Timer {
     fn read(&self, _: &crate::memory::mmu::Mmu, address: u16) -> crate::memory::mmu::MemoryRead {
-        self.state.borrow().read(address)
+        let state = self.state.borrow();
+        match address {
+            0xFF04 => MemoryRead::Replace((self.clock.div() >> 8) as u8),
+            0xFF05 => MemoryRead::Replace(state.tima),
+            0xFF06 => MemoryRead::Replace(state.tma),
+            0xFF07 => MemoryRead::Replace(state.tac),
+            _ => MemoryRead::Pass,
+        }
     }
 
     fn write(
@@ -119,37 +126,23 @@ impl MemoryHandler for Timer {
         address: u16,
         value: u8,
     ) -> crate::memory::mmu::MemoryWrite {
-        self.state.borrow_mut().write(address, value)
-    }
-}
-
-impl TimerState {
-    fn read(&self, address: u16) -> MemoryRead {
-        match address {
-            0xFF04 => MemoryRead::Replace((self.clock.div() >> 8) as u8),
-            0xFF05 => MemoryRead::Replace(self.tima),
-            0xFF06 => MemoryRead::Replace(self.tma),
-            0xFF07 => MemoryRead::Replace(self.tac),
-            _ => MemoryRead::Pass,
-        }
-    }
-
-    fn write(&mut self, address: u16, value: u8) -> MemoryWrite {
+        let mut state = self.state.borrow_mut();
         match address {
             0xFF04 => {
                 let previous = self.clock.div();
+                let tac = state.tac;
                 self.clock.reset_div();
-                self.state_change(previous, 0, self.tac);
+                state.state_change(previous, 0, tac);
                 return MemoryWrite::Block;
             }
             0xFF05 => {
-                self.tima = value;
-                self.overflowed = false;
+                state.tima = value;
+                state.overflowed = false;
             }
-            0xFF06 => self.tma = value,
+            0xFF06 => state.tma = value,
             0xFF07 => {
                 let counter = self.clock.div();
-                self.state_change(counter, counter, value & 0b111);
+                state.state_change(counter, counter, value & 0b111);
             }
             _ => {}
         }
