@@ -1,11 +1,14 @@
 use clap::Parser;
-use std::{num::ParseIntError, path::PathBuf};
+use serde::{Deserialize, Deserializer};
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+// Shared ISA types come from `common`; re-exported so `use crate::types::*`
+// still reaches them. Parsing yaml into them lives here, not in `common`.
+pub use common::{Condition, Cycles, Operand, Reg16, Reg8};
 
 #[derive(Debug, Deserialize)]
 pub struct ConditionalTime {
-    // Order matters here, since the yaml declares them in this order
+    // Order matters: the yaml lists taken first.
     pub taken: usize,
     pub not_taken: usize,
 }
@@ -17,11 +20,27 @@ pub enum Time {
     Two(ConditionalTime),
 }
 
+impl Time {
+    /// M-cycles, unconditional path (taken for conditionals).
+    pub fn mcycles(&self) -> usize {
+        match self {
+            Time::One(t) => t / 4,
+            Time::Two(c) => c.taken / 4,
+        }
+    }
+    pub fn is_conditional(&self) -> bool {
+        matches!(self, Time::Two(_))
+    }
+}
+
+/// One yaml row. Codegen-only: `common::Instruction` is the runtime disasm
+/// entry and a different shape.
 #[derive(Debug, Deserialize)]
 pub struct Instruction {
     pub code: u16,
     pub operator: String,
-    pub operands: Vec<String>,
+    #[serde(deserialize_with = "de_operands")]
+    pub operands: Vec<Operand>,
     pub bits: usize,
     pub size: usize,
     pub time: Time,
@@ -31,167 +50,119 @@ pub struct Instruction {
     pub c: String,
 }
 
-pub enum Reg8 {
-    A,
-    B,
-    C,
-    D,
-    E,
-    F,
-    H,
-    L,
-}
-
-impl TryFrom<&str> for Reg8 {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "a" => Ok(Reg8::A),
-            "b" => Ok(Reg8::B),
-            "c" => Ok(Reg8::C),
-            "d" => Ok(Reg8::D),
-            "e" => Ok(Reg8::E),
-            "f" => Ok(Reg8::F),
-            "h" => Ok(Reg8::H),
-            "l" => Ok(Reg8::L),
-            _ => Err(format!("Unknown register '{}'", value)),
-        }
+impl Instruction {
+    pub fn prefixed(&self) -> bool {
+        self.code & 0xFF00 == 0xCB00
+    }
+    pub fn byte(&self) -> u8 {
+        (self.code & 0xFF) as u8
+    }
+    /// Last operand: the ALU source / the RMW target / the jump target.
+    pub fn last(&self) -> Option<&Operand> {
+        self.operands.last()
+    }
+    /// First `Num` operand: the bit index (bit/res/set) or rst vector.
+    pub fn index(&self) -> Option<u8> {
+        self.operands.iter().find_map(|o| match o {
+            Operand::Num(n) => Some(*n),
+            _ => None,
+        })
+    }
+    pub fn condition(&self) -> Option<Condition> {
+        self.operands.iter().find_map(|o| match o {
+            Operand::Cond(c) => Some(*c),
+            _ => None,
+        })
     }
 }
 
-pub enum Reg16 {
-    AF,
-    BC,
-    DE,
-    HL,
-    SP,
-    PC,
+// --- yaml -> common::Operand (the serde seam, codegen-local) ----------------
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawOperand {
+    Int(u8),
+    Str(String),
 }
 
-impl TryFrom<&str> for Reg16 {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "af" => Ok(Reg16::AF),
-            "bc" => Ok(Reg16::BC),
-            "de" => Ok(Reg16::DE),
-            "hl" => Ok(Reg16::HL),
-            "sp" => Ok(Reg16::SP),
-            "pc" => Ok(Reg16::PC),
-            _ => Err(format!("Unknown 16 bits register '{}'", value)),
-        }
-    }
+fn de_operands<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Operand>, D::Error> {
+    let raw = Vec::<RawOperand>::deserialize(d)?;
+    raw.into_iter()
+        .map(|r| match r {
+            RawOperand::Int(n) => Ok(Operand::Num(n)),
+            RawOperand::Str(s) => parse_operand(&s),
+        })
+        .collect::<Result<_, String>>()
+        .map_err(serde::de::Error::custom)
 }
 
-pub enum Condition {
-    Unconditional,
-    NotZero,
-    Zero,
-    NotCarry,
-    Carry,
-}
-
-impl TryFrom<&str> for Condition {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "nz" => Ok(Condition::NotZero),
-            "z" => Ok(Condition::Zero),
-            "nc" => Ok(Condition::NotCarry),
-            "cf" => Ok(Condition::Carry),
-            _ => Err(format!("Unknown condition {}", value)),
-        }
-    }
-}
-
-pub enum Operand {
-    R8(Reg8),
-    R16(Reg16),
-    Imm8,
-    Rel8,
-    Imm16,
-    Cond(Condition),
-    Mem(Box<Operand>),     // (hl) (bc) (a16)
-    HighMem(Box<Operand>), // (0xff00+c) (0xff00+a8)
-    Bit(u8),               // "0".."7"
-    Vector(u8),            // 0x00..0x38 for rst
-    Dummy(u8),             // dummy variant for stop N
-}
-
-impl Operand {
-    pub fn from_bit(value: &str) -> Result<Self, String> {
-        let bit: u8 = match value.parse() {
-            Ok(val) => val,
-            Err(e) => return Err(format!("failed to parse bit {}: {}", value, e)),
-        };
-        match bit {
-            0..=7 => Ok(Self::Bit(bit)),
-            _ => Err(format!("invalid bit {}", value)),
-        }
-    }
-
-    // The yaml spells reset vectors in hex ("0x00".."0x38"), but accept plain
-    // decimal too so the two notations can't silently diverge.
-    pub fn from_vector(value: &str) -> Result<Self, ParseIntError> {
-        match value
-            .strip_prefix("0x")
-            .or_else(|| value.strip_prefix("0X"))
-        {
-            Some(hex) => Ok(Self::Vector(u8::from_str_radix(hex, 16)?)),
-            None => Ok(Self::Vector(value.parse()?)),
-        }
-    }
-}
-
-impl TryFrom<&str> for Operand {
-    type Error = ();
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if let Ok(reg) = Reg8::try_from(value) {
-            return Ok(Operand::R8(reg));
-        }
-        if let Ok(reg) = Reg16::try_from(value) {
-            return Ok(Operand::R16(reg));
-        }
-        if let Ok(cond) = Condition::try_from(value) {
-            return Ok(Operand::Cond(cond));
-        }
-        if let Some(inner) = value.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
-            return match inner.strip_prefix("0xff00+") {
-                Some(hi) => Ok(Operand::HighMem(Box::new(Operand::try_from(hi)?))),
-                None => Ok(Operand::Mem(Box::new(Operand::try_from(inner)?))),
+fn parse_operand(v: &str) -> Result<Operand, String> {
+    if let Some(inner) = v.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        if let Some(base) = inner.strip_prefix("0xff00+") {
+            return match base {
+                "c" => Ok(Operand::HighC),
+                "a8" => Ok(Operand::HighImm8),
+                _ => Err(format!("unknown high base '{base}'")),
             };
         }
-        match value {
-            "d8" | "a8" => Ok(Operand::Imm8),
-            "r8" => Ok(Operand::Rel8),
-            "d16" | "a16" => Ok(Operand::Imm16),
-            _ => Err(()),
-        }
+        return match inner {
+            "a16" => Ok(Operand::MemImm16),
+            _ => Ok(Operand::Mem(parse_reg16(inner)?)),
+        };
     }
+    match v {
+        "d8" | "a8" => return Ok(Operand::Imm8),
+        "r8" => return Ok(Operand::Rel8),
+        "d16" | "a16" => return Ok(Operand::Imm16),
+        _ => {}
+    }
+    match v.to_lowercase().as_str() {
+        "nz" => return Ok(Operand::Cond(Condition::NotZero)),
+        "z" => return Ok(Operand::Cond(Condition::Zero)),
+        "nc" => return Ok(Operand::Cond(Condition::NotCarry)),
+        "cf" => return Ok(Operand::Cond(Condition::Carry)),
+        _ => {}
+    }
+    if let Ok(r) = parse_reg8(v) {
+        return Ok(Operand::Reg8(r));
+    }
+    if let Ok(r) = parse_reg16(v) {
+        return Ok(Operand::Reg16(r));
+    }
+    if let Ok(n) = v.parse::<u8>() {
+        return Ok(Operand::Num(n)); // quoted dummy, e.g. stop's "0"
+    }
+    Err(format!("unknown operand '{v}'"))
 }
 
-pub enum Cycles {
-    Unconditional(usize),
-    Conditional(usize, usize),
+fn parse_reg8(v: &str) -> Result<Reg8, String> {
+    Ok(match v.to_lowercase().as_str() {
+        "a" => Reg8::A,
+        "b" => Reg8::B,
+        "c" => Reg8::C,
+        "d" => Reg8::D,
+        "e" => Reg8::E,
+        "h" => Reg8::H,
+        "l" => Reg8::L,
+        _ => return Err(format!("unknown r8 '{v}'")),
+    })
 }
 
-#[derive(Debug, Serialize)]
-pub struct InstructionTemplate {
-    pub code: String,     // "01"
-    pub mnemonic: String, // "LD BC, NN"
-    pub cycles: String,   // "Cycles::Unconditional(8)"
-    pub call: String,     // "ld(cpu, Reg16::BC, Imem16)"
+fn parse_reg16(v: &str) -> Result<Reg16, String> {
+    Ok(match v.to_lowercase().as_str() {
+        "af" => Reg16::AF,
+        "bc" => Reg16::BC,
+        "de" => Reg16::DE,
+        "hl" => Reg16::HL,
+        "sp" => Reg16::SP,
+        "pc" => Reg16::PC,
+        _ => return Err(format!("unknown r16 '{v}'")),
+    })
 }
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 pub struct GenerateArgs {
-    #[arg(long)]
-    pub template_path: PathBuf,
     #[arg(long)]
     pub oplist: PathBuf,
     #[arg(long = "out")]

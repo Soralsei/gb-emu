@@ -4,11 +4,12 @@ use std::rc::Rc;
 
 use super::registers::Registers;
 use crate::clock::{CpuClock, FixedClock, Timeline, M_CYCLE};
-use crate::cpu::instructions::Condition;
+use crate::cpu::instructions::{execute_prefixed, execute_unprefixed};
 use crate::cpu::interrupt::InterruptController;
-use crate::cpu::registers::{Flags, Reg16, Reg8};
+use crate::cpu::registers::{self, Flags, Reg16, Reg8};
 use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
+use common::Condition;
 
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum Ime {
@@ -24,18 +25,9 @@ pub struct Cpu {
     halted: Cell<bool>,
     halt_bug: Cell<bool>,
     ime: Cell<Ime>,
-}
 
-impl Condition {
-    pub fn eval(&self, flags: &Flags) -> bool {
-        match self {
-            Condition::Unconditional => true,
-            Condition::NotZero => !flags.zero,
-            Condition::Zero => flags.zero,
-            Condition::NotCarry => !flags.carry,
-            Condition::Carry => flags.carry,
-        }
-    }
+    // Happens on CPU panic (unknown opcode decode wedges the cpu and stops fetches)
+    wedged: Cell<bool>,
 }
 
 impl Cpu {
@@ -46,6 +38,7 @@ impl Cpu {
             instr: Cell::new(0),
             halted: Cell::new(false),
             halt_bug: Cell::new(false),
+            wedged: Cell::new(false),
         }
     }
 
@@ -155,7 +148,7 @@ impl CpuTask {
         self.cpu.registers.borrow_mut()
     }
 
-    fn registers(&self) -> Ref<'_, Registers> {
+    pub fn registers(&self) -> Ref<'_, Registers> {
         self.cpu.registers.borrow()
     }
 
@@ -198,7 +191,23 @@ impl CpuTask {
     }
 
     pub fn cond(&self, cond: Condition) -> bool {
-        cond.eval(&self.registers().f)
+        let flags = &self.registers().f;
+        match cond {
+            Condition::Unconditional => true,
+            Condition::NotZero => !flags.zero,
+            Condition::Zero => flags.zero,
+            Condition::NotCarry => !flags.carry,
+            Condition::Carry => flags.carry,
+        }
+    }
+
+    pub fn high(&self, reg: Reg8) -> u16 {
+        0xFF00 | self.registers().read_u8(reg) as u16
+    }
+
+    pub fn rel(&self, reg: Reg8) -> u16 {
+        let pc = self.registers().pc;
+        pc.wrapping_add_signed(self.registers().read_u8(reg) as i8 as i16)
     }
 
     pub fn jump(&self, addr: u16) {
@@ -301,6 +310,10 @@ impl CpuTask {
         registers.write_u16(dst, val);
     }
 
+    pub fn set16(&self, dst: Reg16, value: u16) {
+        self.registers_mut().write_u16(dst, value);
+    }
+
     /// `bit b,r`: one register in, flags out, nothing written back. The bit
     /// index rides in the closure, since it comes from the opcode rather than
     /// the register file.
@@ -325,8 +338,16 @@ impl CpuTask {
         self.cpu.set_ime(Ime::Pending);
     }
 
+    pub fn ei_now(&self) {
+        self.cpu.set_ime(Ime::Enabled);
+    }
+
     pub fn di(&self) {
         self.cpu.set_ime(Ime::Disabled);
+    }
+
+    pub fn halt(&self) {
+        self.cpu.halt();
     }
 
     pub async fn stop(&self) {
@@ -374,5 +395,12 @@ impl CpuTask {
         self.clock.reset_div();
         self.clock.stop();
         self.fixed_clock.stop();
+    }
+
+    pub async fn illegal(&self) -> Infallible {
+        self.cpu.wedged.set(true);
+        loop {
+            self.idle().await;
+        }
     }
 }

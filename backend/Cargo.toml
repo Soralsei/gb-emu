@@ -6,3 +6,6 @@ edition = "2021"
 [features]
 blaarg = [] # no dependencies
 debug = []
+
+[dependencies]
+common = { path = "../common" }

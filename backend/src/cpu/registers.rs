@@ -45,30 +45,9 @@ impl std::convert::From<u8> for Flags {
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum Reg8 {
-    A,
-    B,
-    C,
-    D,
-    E,
-    F,
-    H,
-    L,
-    W,
-    Z,
-}
-
-#[derive(Copy, Clone)]
-pub enum Reg16 {
-    AF,
-    BC,
-    DE,
-    HL,
-    SP,
-    PC,
-    WZ,
-}
+// Single source of truth — see the `common` crate. Re-exported so existing
+// `crate::cpu::registers::{Reg8, Reg16}` imports keep working.
+pub use common::{Reg16, Reg8};
 
 #[derive(Debug, Clone)]
 pub struct Registers {
