@@ -366,6 +366,12 @@ impl Ppu {
                     timeline.wait(1).await;
                 }
             }
+            // The row came from the background map. If the window started while
+            // it was held, it is dropped rather than pushed, and the top of the
+            // loop re-fetches the same x from the window map.
+            if !window && state.window.get() {
+                continue;
+            }
             state.bg_fifo.borrow_mut().fill(pixels);
 
             fetcher_x += 1;
@@ -483,6 +489,14 @@ impl Ppu {
             if !window && self.window_should_start(lx as u8) {
                 window = true;
                 state.window.set(true);
+                // Both belong to the background fetch being abandoned: the
+                // pixels already queued, and the SCX fine scroll, which the
+                // window is not subject to. Clearing here rather than in the
+                // fetcher is what makes the switch take effect on this dot —
+                // the fetcher is parked in its push stall and cannot react
+                // until the FIFO drains, which is the drain being cancelled.
+                state.bg_fifo.borrow_mut().clear();
+                discard = 0;
                 continue; // no wait: the stall comes from the cleared BG FIFO
             }
 

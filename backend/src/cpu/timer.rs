@@ -99,11 +99,11 @@ impl TimerState {
             self.is_cgb && current_selected_set && !previous_active && current_active;
 
         if selected_edge_falling || dmg_set_disabled || cgb_set_enabled {
-            if self.tima.checked_add(1).is_none() {
-                self.tima = self.tma;
-            } else {
-                self.tima += 1;
-            }
+            // On overflow TIMA reads 0 for one M-cycle; `advance_to` does the
+            // TMA reload and raises the interrupt on the next one.
+            let (tima, overflowed) = self.tima.overflowing_add(1);
+            self.tima = tima;
+            self.overflowed |= overflowed;
         }
     }
 }
