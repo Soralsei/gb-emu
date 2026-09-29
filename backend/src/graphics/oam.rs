@@ -31,21 +31,19 @@ impl DMAState {
 }
 
 pub struct DMAController {
-    mmu: Rc<Mmu>,
     bus_controller: Rc<BusController>,
     state: DMAState,
 }
 
 impl DMAController {
-    pub fn new(mmu: Rc<Mmu>, bus_controller: Rc<BusController>) -> Self {
+    pub fn new(bus_controller: Rc<BusController>) -> Self {
         Self {
-            mmu,
             bus_controller,
             state: DMAState::new(),
         }
     }
 
-    pub async fn task(this: Rc<DMAController>, timeline: Timeline) -> Infallible {
+    pub async fn task(this: Rc<DMAController>, mmu: Rc<Mmu>, timeline: Timeline) -> Infallible {
         loop {
             while !this.state.requested.get() {
                 timeline.wait(M_CYCLE as Cycles).await;
@@ -56,14 +54,14 @@ impl DMAController {
                 timeline.wait(M_CYCLE as Cycles).await;
                 // resume checkpoint for save states go here
                 // ...
-                let value = this.mmu.peek(src | offset);
+                let value = mmu.peek(src | offset);
 
                 // Idempotent
                 this.bus_controller.seize(Bus::Oam, BusOwner::Dma, 0xFF);
                 this.bus_controller
                     .seize_bus_of(src_addr, BusOwner::Dma, value);
 
-                this.mmu.poke(0xFE00 | offset, value);
+                mmu.poke(0xFE00 | offset, value);
             }
             this.bus_controller.release_bus_for(src, BusOwner::Dma);
             this.bus_controller.release(Bus::Oam, BusOwner::Dma);

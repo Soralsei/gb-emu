@@ -1,8 +1,8 @@
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
-use super::interrupt::InterruptRequest;
 use crate::{
-    clock::{CpuClock, Cycles, Timeline, M_CYCLE},
+    clock::{CpuClock, Cycles, Pulse, Timeline, M_CYCLE},
+    cpu::interrupt::InterruptRequest,
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
 };
@@ -13,6 +13,7 @@ const TIMA_PERIODS: [u16; 4] = [1024, 16, 64, 256];
 /// handler, which never nest, so one cell at the device boundary is enough and
 /// all of the logic below keeps plain `&mut self`.
 pub struct Timer {
+    div_apu: Pulse,
     clock: Rc<CpuClock>,
     state: RefCell<TimerState>,
 }
@@ -21,6 +22,7 @@ impl Timer {
     pub fn new(interrupt_request: InterruptRequest, clock: Rc<CpuClock>, is_cgb: bool) -> Self {
         Self {
             clock,
+            div_apu: Pulse::new(),
             state: RefCell::new(TimerState {
                 interrupt_request,
                 tima: 0,
@@ -32,12 +34,26 @@ impl Timer {
         }
     }
 
+    /// DIV-APU: bit 4 of DIV (bit 12 of the counter) falling, at 512 Hz. Double
+    /// speed moves it to bit 13 so the rate holds.
+    fn div_apu_edge(&self, previous: u16, next: u16) {
+        let bit = 0x1000 << u8::from(self.clock.speed());
+        if previous & !next & bit != 0 {
+            self.div_apu.raise();
+        }
+    }
+
+    pub fn div_apu(&self) -> Pulse {
+        self.div_apu.clone()
+    }
+
     pub async fn task(this: Rc<Self>, timeline: Timeline) -> Infallible {
         loop {
             timeline.wait(M_CYCLE as Cycles).await;
             let mut state = this.state.borrow_mut();
-            let counter = this.clock.div();
-            state.advance_to(counter);
+            let div = this.clock.div();
+            state.advance_to(div);
+            this.div_apu_edge(div.wrapping_sub(M_CYCLE as u16), div);
         }
     }
 }
@@ -133,6 +149,7 @@ impl MemoryHandler for Timer {
                 let tac = state.tac;
                 self.clock.reset_div();
                 state.state_change(previous, 0, tac);
+                self.div_apu_edge(previous, 0);
                 return MemoryWrite::Block;
             }
             0xFF05 => {

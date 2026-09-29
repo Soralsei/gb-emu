@@ -6,7 +6,7 @@ use super::registers::Registers;
 use crate::clock::{CpuClock, FixedClock, Timeline, M_CYCLE};
 use crate::cpu::instructions::{execute_prefixed, execute_unprefixed};
 use crate::cpu::interrupt::InterruptController;
-use crate::cpu::registers::{self, Flags, Reg16, Reg8};
+use crate::cpu::registers::{Flags, Reg16, Reg8};
 use crate::memory::bus::CpuBus;
 use crate::util::bit_operations::*;
 use common::Condition;

@@ -1,7 +1,26 @@
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell, rc::Rc};
+
+/// The address map, built with `&mut` before the bus is shared. `Mmu::new`
+/// takes it by value, so no handler can be added once dispatch is possible.
+pub struct AddressMap(Box<[Vec<Rc<dyn MemoryHandler>>]>);
+
+impl AddressMap {
+    pub fn new() -> Self {
+        Self(
+            (0..0x10000)
+                .map(|_| Vec::with_capacity(2))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    }
+
+    /// Registration order is dispatch order: the first handler to answer wins.
+    pub fn add(&mut self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
+        for address in address_range.0..=address_range.1 {
+            self.0[address as usize].push(handler.clone());
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRead {
@@ -24,51 +43,29 @@ pub trait MemoryHandler {
     fn write(&self, mmu: &Mmu, address: u16, value: u8) -> MemoryWrite;
 }
 
-#[allow(unused)]
 pub struct Mmu {
     /// Indexed by address rather than keyed by it. The map is dense, so a tree
     /// walk per access buys nothing over an indexed load. Costs 1.5MB.
-    handlers: RefCell<Box<[Vec<Rc<dyn MemoryHandler>>]>>,
+    handlers: AddressMap,
     /// `Cell<u8>` is `repr(transparent)`, so this has the layout and access cost
     /// of `[u8; 0x10000]`. Interior mutability is what lets the bus be shared as
     /// an `Rc<Mmu>`: a clocked device (OAM DMA, the PPU fetcher) only ever holds
     /// `&Mmu`, and still has to be able to drive a write.
     memory: [Cell<u8>; 0x10000],
-    pub interrupts_enable: u8,
-    pub interrupts_flags: u8,
 }
 
 impl Mmu {
-    pub fn new() -> Mmu {
+    pub fn new(address_map: AddressMap) -> Mmu {
         Mmu {
-            handlers: RefCell::new(
-                (0..0x10000)
-                    .map(|_| Vec::with_capacity(2))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            ),
+            handlers: address_map,
             memory: [const { Cell::new(0) }; 0x10000],
-            interrupts_enable: 0,
-            interrupts_flags: 0,
-        }
-    }
-
-    /// Takes `&self` so devices can be registered after the bus is behind an
-    /// `Rc`, which they have to be when a device needs a handle to the bus.
-    pub fn add_handler(&self, address_range: (u16, u16), handler: Rc<dyn MemoryHandler>) {
-        let mut handlers = self.handlers.borrow_mut();
-        for address in address_range.0..=address_range.1 {
-            handlers[address as usize].push(handler.clone());
         }
     }
 
     /// Read a byte. The address map only: no machine cycle, no arbitration.
     /// The CPU reaches memory through `CpuBus`, which adds both.
     pub fn peek(&self, addr: u16) -> u8 {
-        // Held while handlers run: one may come back through `peek` (the blaarg
-        // spy does), and nested shared borrows are fine. Mutating the table from
-        // inside dispatch is not — see `add_handler`.
-        let handlers = self.handlers.borrow();
+        let handlers = &self.handlers.0;
         for handler in handlers[addr as usize].iter() {
             match handler.read(self, addr) {
                 MemoryRead::Replace(value) => return value,
@@ -87,20 +84,17 @@ impl Mmu {
     /// Write a byte. The address map only: no machine cycle, no arbitration.
     /// This is the path a clocked device uses to drive the bus it owns.
     pub fn poke(&self, addr: u16, value: u8) {
-        let outcome = {
-            let handlers = self.handlers.borrow();
-            let mut outcome = MemoryWrite::Pass;
-            for handler in handlers[addr as usize].iter() {
-                match handler.write(self, addr, value) {
-                    MemoryWrite::Pass => (),
-                    decided => {
-                        outcome = decided;
-                        break;
-                    }
+        let handlers = &self.handlers.0;
+        let mut outcome = MemoryWrite::Pass;
+        for handler in handlers[addr as usize].iter() {
+            match handler.write(self, addr, value) {
+                MemoryWrite::Pass => (),
+                decided => {
+                    outcome = decided;
+                    break;
                 }
             }
-            outcome
-        };
+        }
 
         let value = match outcome {
             MemoryWrite::Block => return,

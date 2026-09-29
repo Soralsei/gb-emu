@@ -32,7 +32,7 @@ impl MbcType {
     pub fn new(code: u8, rom: Vec<u8>, rom_size: usize, ram_size: usize) -> MbcType {
         match code {
             0x00 => MbcType::MbcNone(MbcNone::new(rom, ram_size)),
-            0x01 | 0x02 | 0x03 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
+            0x01..=0x03 => MbcType::Mbc1(Mbc1::new(rom, ram_size)),
             _ => unimplemented!("Mbc type 0x{:02X} not yet implemented", code),
         }
     }

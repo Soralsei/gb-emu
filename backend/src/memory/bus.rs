@@ -1,6 +1,5 @@
 use std::{cell::Cell, rc::Rc};
 
-use crate::clock::M_CYCLE;
 use crate::memory::mmu::Mmu;
 
 #[derive(Debug, Clone, Copy)]

@@ -6,14 +6,14 @@ use crate::graphics::oam::DMAController;
 use crate::graphics::ppu::{Frame, Ppu};
 use crate::input::{Button, JoypadHandler};
 use crate::memory::bus::{BusController, CpuBus};
-use crate::memory::mmu::{MemoryRead, MemoryWrite};
+use crate::memory::mmu::{AddressMap, MemoryRead, MemoryWrite};
+use crate::timer::Timer;
 
 use super::memory::mbc::Mbc;
 use super::memory::mmu::MemoryHandler;
 
 use super::cpu::cpu::Cpu;
 use super::cpu::interrupt::InterruptController;
-use super::cpu::timer::Timer;
 #[cfg(feature = "blaarg")]
 use super::debug::blaarg_spy::BlaargSpy;
 use super::memory::mmu::Mmu;
@@ -50,14 +50,14 @@ impl MemoryHandler for Unmapped {
 pub struct System {
     cpu: Rc<Cpu>,
     ppu: Rc<Ppu>,
+    mmu: Rc<Mmu>,
     time: Time,
-    interrupt_controller: Rc<InterruptController>,
     joypad: Rc<JoypadHandler>,
 }
 
 impl System {
     pub fn new(boot_rom: Option<Vec<u8>>, rom: Vec<u8>, is_cgb_override: bool) -> Self {
-        let time = Time::new();
+        let mut time = Time::new();
 
         let mbc = Rc::new(Mbc::new(boot_rom, rom));
         let is_cgb = mbc.cartridge().is_cgb_only() || is_cgb_override;
@@ -71,22 +71,68 @@ impl System {
         ));
         let joypad = Rc::new(JoypadHandler::new(interrupt_controller.request()));
 
+        let bus_controller = Rc::new(BusController::new());
+        let dma = Rc::new(DMAController::new(bus_controller.clone()));
+
         // The bus is shared: the CPU drives it, and clocked devices that move
         // bytes themselves (OAM DMA, the PPU fetcher) need a handle to it too.
-        let mmu = Rc::new(Mmu::new());
-        let bus_controller = Rc::new(BusController::new());
-
         let cpu = Rc::new(Cpu::new(is_cgb));
         let ppu = Rc::new(Ppu::new(
             interrupt_controller.request(),
             bus_controller.clone(),
             is_cgb,
         ));
-        let dma = Rc::new(DMAController::new(mmu.clone(), bus_controller.clone()));
+
+        let mut map = AddressMap::new();
+
+        #[cfg(feature = "blaarg")]
+        {
+            println!("Added blaarg debug feature");
+            map.add((0xA000, 0xBFFF), Rc::new(BlaargSpy()));
+        }
+
+        map.add((0x0000, 0x7FFF), mbc.clone());
+        map.add((0xFF50, 0xFF50), mbc.clone());
+        map.add((0xA000, 0xBFFF), mbc.clone());
+
+        // PPU VRAM
+        map.add((0x8000, 0x9FFF), ppu.clone());
+        // OAM
+        map.add((0xFE00, 0xFE9F), ppu.clone());
+        // Ppu registers other than OAM DMA
+        map.add((0xFF40, 0xFF45), ppu.clone());
+        // OAM DMA register
+        map.add((0xFF46, 0xFF46), dma.clone());
+        // Ppu rest of registers
+        map.add((0xFF47, 0xFF4B), ppu.clone());
+
+        map.add((0xFF00, 0xFF00), joypad.clone());
+
+        map.add((0xFF01, 0xFF02), serial.clone());
+        map.add((0xFF04, 0xFF07), timer.clone());
+
+        map.add((0xFF0F, 0xFF0F), interrupt_controller.clone());
+        if is_cgb {
+            map.add((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(time.cpu.clone())));
+            // TODO: map other IO registers in the CGB
+        } else {
+            let unmapped = Rc::new(Unmapped);
+            map.add((0xFF4D, 0xFF4D), unmapped.clone()); // KEY1
+            map.add((0xFF4F, 0xFF4F), unmapped.clone()); // VBK
+            map.add((0xFF51, 0xFF55), unmapped.clone()); // HDMA1-5
+            map.add((0xFF68, 0xFF6B), unmapped.clone()); // BCPS/BCPD/OCPS/OCPD
+            map.add((0xFF70, 0xFF70), unmapped);
+        }
+        map.add((0xFFFF, 0xFFFF), interrupt_controller.clone());
+        let mmu = Rc::new(Mmu::new(map));
 
         time.spawn(Ppu::task(ppu.clone(), time.fixed.timeline()));
         time.spawn(Serial::task(serial.clone(), time.cpu.timeline()));
-        time.spawn(DMAController::task(dma.clone(), time.cpu.timeline()));
+        time.spawn(DMAController::task(
+            dma.clone(),
+            mmu.clone(),
+            time.cpu.timeline(),
+        ));
         time.spawn(Timer::task(timer.clone(), time.cpu.timeline()));
         time.spawn(Cpu::task(
             cpu.clone(),
@@ -96,51 +142,11 @@ impl System {
             time.fixed.clone(),
         ));
 
-        #[cfg(feature = "blaarg")]
-        {
-            println!("Added blaarg debug feature");
-            mmu.add_handler((0xA000, 0xBFFF), Rc::new(BlaargSpy()));
-        }
-
-        mmu.add_handler((0x0000, 0x7FFF), mbc.clone());
-        mmu.add_handler((0xFF50, 0xFF50), mbc.clone());
-        mmu.add_handler((0xA000, 0xBFFF), mbc.clone());
-
-        // PPU VRAM
-        mmu.add_handler((0x8000, 0x9FFF), ppu.clone());
-        // OAM
-        mmu.add_handler((0xFE00, 0xFE9F), ppu.clone());
-        // Ppu registers other than OAM DMA
-        mmu.add_handler((0xFF40, 0xFF45), ppu.clone());
-        // OAM DMA register
-        mmu.add_handler((0xFF46, 0xFF46), dma.clone());
-        // Ppu rest of registers
-        mmu.add_handler((0xFF47, 0xFF4B), ppu.clone());
-
-        mmu.add_handler((0xFF00, 0xFF00), joypad.clone());
-
-        mmu.add_handler((0xFF01, 0xFF02), serial.clone());
-        mmu.add_handler((0xFF04, 0xFF07), timer.clone());
-
-        mmu.add_handler((0xFF0F, 0xFF0F), interrupt_controller.clone());
-        if is_cgb {
-            mmu.add_handler((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(time.cpu.clone())));
-            // TODO: map other IO registers in the CGB
-        } else {
-            let unmapped = Rc::new(Unmapped);
-            mmu.add_handler((0xFF4D, 0xFF4D), unmapped.clone()); // KEY1
-            mmu.add_handler((0xFF4F, 0xFF4F), unmapped.clone()); // VBK
-            mmu.add_handler((0xFF51, 0xFF55), unmapped.clone()); // HDMA1-5
-            mmu.add_handler((0xFF68, 0xFF6B), unmapped.clone()); // BCPS/BCPD/OCPS/OCPD
-            mmu.add_handler((0xFF70, 0xFF70), unmapped);
-        }
-        mmu.add_handler((0xFFFF, 0xFFFF), interrupt_controller.clone());
-
         Self {
             cpu,
             ppu,
+            mmu,
             time,
-            interrupt_controller,
             joypad,
         }
     }

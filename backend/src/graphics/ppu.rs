@@ -627,7 +627,7 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
-            let time = Time::new();
+            let mut time = Time::new();
             let interrupts = Rc::new(InterruptController::new());
             let ppu = Rc::new(Ppu::new(
                 interrupts.request(),
@@ -651,7 +651,7 @@ mod tests {
         }
 
         /// One full frame is 154 lines of 456 dots.
-        fn run_frame(&self) {
+        fn run_frame(&mut self) {
             for _ in 0..(70224) {
                 self.time.tick();
             }
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn an_object_suspends_the_shifter_without_deadlocking() {
-        let h = basic_bg();
+        let mut h = basic_bg();
         h.reg(0xFF40, 0x93); // + LCDC.1, objects on
         h.reg(0xFF48, 0xE4); // OBP0
 
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn mode3_completes_and_advances_ly() {
-        let h = basic_bg();
+        let mut h = basic_bg();
         h.run_frame();
         // If mode 3 ever deadlocked, LY would be parked wherever it stalled.
         assert!(
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn renders_the_background_tile_pattern() {
-        let h = basic_bg();
+        let mut h = basic_bg();
         h.run_frame();
 
         let frame = h.ppu.framebuffer();
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn scx_shifts_the_background_left() {
-        let h = basic_bg();
+        let mut h = basic_bg();
         h.reg(0xFF43, 2); // SCX = 2 discards two pixels from the first tile
         h.run_frame();
 

@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -77,6 +77,30 @@ impl Future for Wait {
         } else {
             Poll::Pending
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Pulse(Rc<Cell<u32>>);
+
+impl Pulse {
+    pub fn new() -> Self {
+        Self(Rc::new(Cell::new(0u32)))
+    }
+
+    pub fn raise(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+
+    #[must_use = "does nothing unless awaited"]
+    pub fn next(&self) -> impl Future<Output = ()> + '_ {
+        std::future::poll_fn(|_| match self.0.get() {
+            0 => Poll::Pending,
+            n => {
+                self.0.set(n - 1);
+                Poll::Ready(())
+            }
+        })
     }
 }
 
@@ -208,6 +232,9 @@ impl CpuClock {
     pub fn key1(&self) -> u8 {
         0x7E | (self.speed.get() as u8) << 7 | self.switch_armed.get() as u8
     }
+    pub fn speed(&self) -> Speed {
+        self.speed.get()
+    }
     pub fn switch_speed(&self) {
         self.speed.set(match self.speed.get() {
             Speed::Normal => Speed::Double,
@@ -218,37 +245,30 @@ impl CpuClock {
 }
 
 struct Executor {
-    tasks: RefCell<Vec<Task>>,
+    tasks: Vec<Task>,
 }
 
 impl Executor {
     pub fn new() -> Self {
         Self {
-            tasks: RefCell::new(Vec::with_capacity(10)),
+            tasks: Vec::with_capacity(10),
         }
     }
 
     /// Polled once here so the task reaches its first `await` at the current
     /// cycle rather than the next tick's.
-    pub fn spawn(&self, future: impl Future<Output = Infallible> + 'static) {
+    pub fn spawn(&mut self, future: impl Future<Output = Infallible> + 'static) {
         let mut future = Box::pin(future);
         let _ = future
             .as_mut()
             .poll(&mut Context::from_waker(Waker::noop()));
-        self.tasks
-            .try_borrow_mut()
-            .expect("Executor::spawn called from inside a task poll")
-            .push(Task(future));
+        self.tasks.push(Task(future));
     }
 
     /// Every task, in spawn order, unconditionally. Order is savestate contract.
-    pub fn poll(&self) {
-        let mut tasks = self
-            .tasks
-            .try_borrow_mut()
-            .expect("Executor::poll re-entered from inside a task poll");
+    pub fn poll(&mut self) {
         let mut cx = Context::from_waker(Waker::noop());
-        for task in tasks.iter_mut() {
+        for task in self.tasks.iter_mut() {
             let _ = task.0.as_mut().poll(&mut cx);
         }
     }
@@ -269,13 +289,13 @@ impl Time {
         }
     }
 
-    pub fn tick(&self) {
+    pub fn tick(&mut self) {
         self.fixed.tick();
         self.cpu.tick();
         self.exec.poll();
     }
 
-    pub fn spawn(&self, future: impl Future<Output = Infallible> + 'static) {
+    pub fn spawn(&mut self, future: impl Future<Output = Infallible> + 'static) {
         self.exec.spawn(future);
     }
 
@@ -301,13 +321,17 @@ mod tests {
         }
     }
 
-    fn clock_tick(clock: &Time, ticks: u32) {
+    fn clock_tick(clock: &mut Time, ticks: u32) {
         for _ in 0..ticks {
             clock.tick();
         }
     }
 
-    fn spawn_ticker(clock: &Time, timeline: Timeline, period: Cycles) -> Rc<RefCell<Vec<Cycles>>> {
+    fn spawn_ticker(
+        clock: &mut Time,
+        timeline: Timeline,
+        period: Cycles,
+    ) -> Rc<RefCell<Vec<Cycles>>> {
         let log: Rc<RefCell<Vec<Cycles>>> = Rc::new(RefCell::new(Vec::new()));
         let handle = log.clone();
         clock.spawn(ticker(timeline, period, handle));
@@ -316,46 +340,50 @@ mod tests {
 
     #[test]
     fn does_not_wake_before_its_deadline() {
-        let clock = Time::new();
-        let log = spawn_ticker(&clock, clock.fixed.timeline(), 4);
+        let mut clock = Time::new();
+        let timeline = clock.fixed.timeline();
+        let log = spawn_ticker(&mut clock, timeline, 4);
 
-        clock_tick(&clock, 2);
+        clock_tick(&mut clock, 2);
         assert!(log.borrow().is_empty());
 
-        clock_tick(&clock, 2);
+        clock_tick(&mut clock, 2);
         assert_eq!(*log.borrow(), vec![4]);
     }
 
     #[test]
     fn catches_up_inside_one_poll() {
-        let clock = Time::new();
-        let log = spawn_ticker(&clock, clock.fixed.timeline(), 4);
+        let mut clock = Time::new();
+        let timeline = clock.fixed.timeline();
+        let log = spawn_ticker(&mut clock, timeline, 4);
 
         // Three periods in one tick: three wakes, on multiples of the period.
-        clock_tick(&clock, 12);
+        clock_tick(&mut clock, 12);
         assert_eq!(*log.borrow(), vec![4, 8, 12]);
     }
 
     #[test]
     fn double_speed_splits_the_domains() {
-        let clock = Time::new();
-        let cpu = spawn_ticker(&clock, clock.cpu.timeline(), 4);
-        let fixed = spawn_ticker(&clock, clock.fixed.timeline(), 4);
+        let mut clock = Time::new();
+        let t_cpu = clock.cpu.timeline();
+        let t_fixed = clock.fixed.timeline();
+        let cpu = spawn_ticker(&mut clock, t_cpu, 4);
+        let fixed = spawn_ticker(&mut clock, t_fixed, 4);
 
         clock.cpu.switch_speed();
 
-        clock_tick(&clock, 2);
+        clock_tick(&mut clock, 2);
         assert_eq!(*cpu.borrow(), vec![4]);
         assert!(fixed.borrow().is_empty(), "fixed domain ran at CPU rate");
 
-        clock_tick(&clock, 2);
+        clock_tick(&mut clock, 2);
         assert_eq!(*cpu.borrow(), vec![4, 8]);
         assert_eq!(*fixed.borrow(), vec![4]);
     }
 
     #[test]
     fn poll_order_is_spawn_order() {
-        let clock = Time::new();
+        let mut clock = Time::new();
         let order: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
 
         for id in 0..3u8 {
@@ -369,35 +397,36 @@ mod tests {
             });
         }
 
-        clock_tick(&clock, 4);
+        clock_tick(&mut clock, 4);
         assert_eq!(*order.borrow(), vec![0, 1, 2]);
     }
 
     #[test]
     fn div_is_derived_and_resettable() {
-        let clock = Time::new();
+        let mut clock = Time::new();
 
-        clock_tick(&clock, 0x120);
+        clock_tick(&mut clock, 0x120);
         assert_eq!(clock.cpu.div(), 0x120);
 
         clock.cpu.reset_div();
         assert_eq!(clock.cpu.div(), 0);
 
-        clock_tick(&clock, 8);
+        clock_tick(&mut clock, 8);
         assert_eq!(clock.cpu.div(), 8);
     }
 
     #[test]
     fn stopped_clock_advances_nothing() {
-        let clock = Time::new();
-        let log = spawn_ticker(&clock, clock.cpu.timeline(), 4);
+        let mut clock = Time::new();
+        let t_cpu = clock.cpu.timeline();
+        let log = spawn_ticker(&mut clock, t_cpu, 4);
 
         clock.cpu.stop();
-        clock_tick(&clock, 16);
+        clock_tick(&mut clock, 16);
         assert!(log.borrow().is_empty());
 
         clock.cpu.resume();
-        clock_tick(&clock, 4);
+        clock_tick(&mut clock, 4);
         assert_eq!(*log.borrow(), vec![4]);
     }
 }
