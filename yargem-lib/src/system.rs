@@ -90,7 +90,7 @@ impl System {
         #[cfg(feature = "blaarg")]
         {
             println!("Added blaarg debug feature");
-            map.add((0xA000, 0xBFFF), Rc::new(BlaargSpy()));
+            mmu.add_handler((0xA000, 0xBFFF), Rc::new(BlaargSpy));
         }
 
         map.add((0x0000, 0x7FFF), mbc.clone());

@@ -464,6 +464,9 @@ impl Ppu {
         let mut pending: u16 = (1 << objects.len()) - 1;
         let mut lx = 0usize;
         let mut window = false;
+        // WX as it stood when the window took over, so a later write to it can
+        // be told from the value that started the window.
+        let mut window_wx = 0u8;
 
         // Warm-up: hardware discards the first fetch, so the first pixel reaches the
         // LCD 12 dots into mode 3.
@@ -493,6 +496,7 @@ impl Ppu {
 
             if !window && self.window_should_start(lx as u8) {
                 window = true;
+                window_wx = self.registers.borrow().wx();
                 state.window.set(true);
                 // Both belong to the background fetch being abandoned: the
                 // pixels already queued, and the SCX fine scroll, which the
@@ -501,8 +505,24 @@ impl Ppu {
                 // the fetcher is parked in its push stall and cannot react
                 // until the FIFO drains, which is the drain being cancelled.
                 state.bg_fifo.borrow_mut().clear();
-                discard = 0;
+                if self.registers.borrow().wx() != 0 {
+                    discard = 0;
+                }
                 continue; // no wait: the stall comes from the cleared BG FIFO
+            }
+
+            // WX written mid-scanline, after the window started: when the new
+            // value is reached, one colour-0 pixel at the lowest priority is
+            // pushed onto the BG FIFO. It shifts the rest of the window right
+            // by a pixel rather than replacing one, so the row is untouched and
+            // this belongs here and not in the fetcher. Latching the new WX
+            // arms it again for a further write.
+            if window {
+                let wx = self.registers.borrow().wx();
+                if wx != window_wx && lx + 7 == wx as usize {
+                    state.bg_fifo.borrow_mut().push(Pixel::default());
+                    window_wx = wx;
+                }
             }
 
             let Some(bg) = state.bg_fifo.borrow_mut().pop() else {
