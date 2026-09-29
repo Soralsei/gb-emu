@@ -313,6 +313,7 @@ impl Time {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     async fn ticker(t: Timeline, period: Cycles, log: Rc<RefCell<Vec<Cycles>>>) -> Infallible {
         loop {
