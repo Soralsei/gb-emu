@@ -1,6 +1,7 @@
 use std::cell::Ref;
 use std::rc::Rc;
 
+use crate::audio::apu::Apu;
 use crate::clock::{CpuClock, Time};
 use crate::graphics::oam::DMAController;
 use crate::graphics::ppu::{Frame, Ppu};
@@ -82,6 +83,7 @@ impl System {
             bus_controller.clone(),
             is_cgb,
         ));
+        let apu = Rc::new(Apu::new());
 
         let mut map = AddressMap::new();
 
@@ -112,6 +114,7 @@ impl System {
         map.add((0xFF04, 0xFF07), timer.clone());
 
         map.add((0xFF0F, 0xFF0F), interrupt_controller.clone());
+        map.add((0xFF10, 0xFF3F), apu.clone());
         if is_cgb {
             map.add((0xFF4D, 0xFF4D), Rc::new(SpeedSwitch(time.cpu.clone())));
             // TODO: map other IO registers in the CGB

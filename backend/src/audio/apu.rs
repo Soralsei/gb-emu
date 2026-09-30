@@ -2,13 +2,14 @@ use std::cell::RefCell;
 
 use crate::{
     audio::{
-        channel::{Channel, Noise, Square, SquareSweep, Wave},
+        channel::{Channel, Noise, Square, Wave},
         registers::AudioRegisters,
     },
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
 };
 
+#[derive(Debug, Default)]
 struct ApuState {
     is_cgb: bool,
     is_powered: bool,
@@ -16,11 +17,19 @@ struct ApuState {
     ch4: Noise,
     ch3: Wave,
     ch2: Square,
-    ch1: SquareSweep,
+    ch1: Square,
 }
 
 pub struct Apu {
     state: RefCell<ApuState>,
+}
+
+impl Apu {
+    pub fn new() -> Self {
+        Self {
+            state: RefCell::default(),
+        }
+    }
 }
 
 impl ApuState {
@@ -33,6 +42,10 @@ impl ApuState {
         }
     }
 
+    fn channels_mut(&mut self) -> [&mut dyn Channel; 4] {
+        [&mut self.ch1, &mut self.ch2, &mut self.ch3, &mut self.ch4]
+    }
+
     fn read_nr52(&self) -> u8 {
         0b01110000
             | (self.is_powered as u8) << 7
@@ -43,8 +56,25 @@ impl ApuState {
     }
 
     fn write_nr52(&mut self, value: u8) {
-        self.is_powered = is_bit_set!(value, 7);
+        let power = is_bit_set!(value, 7);
+        match (self.is_powered, power) {
+            (true, false) => self.power_off(),
+            (false, true) => self.power_on(),
+            _ => {}
+        }
+        self.is_powered = power;
         // bits 0-3 are read-only and depend only on individual channel enabled state
+    }
+
+    fn power_on(&mut self) {
+        self.ch3.clear()
+    }
+
+    fn power_off(&mut self) {
+        let is_cgb = self.is_cgb;
+        for ch in self.channels_mut() {
+            ch.power_off(is_cgb);
+        }
     }
 }
 
