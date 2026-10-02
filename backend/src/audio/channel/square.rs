@@ -1,8 +1,11 @@
-use crate::audio::channel::{
-    duty::Duty, envelope::Envelope, period::Period, sweep::Sweep, Channel, ChannelCore, NRx4,
+use crate::{
+    audio::channel::core_accessors,
+    audio::channel::{
+        duty::Duty, envelope::Envelope, period::Period, sweep::Sweep, Channel, ChannelCore, NRx4,
+    },
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Square {
     core: ChannelCore,
     duty: Duty,
@@ -11,17 +14,41 @@ pub struct Square {
     sweep: Option<Sweep>, // CH1 only
 }
 
+impl Square {
+    /// CH1: the pulse channel with a sweep unit.
+    pub fn ch1() -> Self {
+        Self {
+            sweep: Some(Sweep::default()),
+            ..Self::ch2()
+        }
+    }
+
+    /// CH2: no sweep, so NR20 reads $FF.
+    pub fn ch2() -> Self {
+        Self {
+            core: ChannelCore::new(64),
+            duty: Duty::default(),
+            envelope: Envelope::default(),
+            period: Period::default(),
+            sweep: None,
+        }
+    }
+}
+
 impl Channel for Square {
-    fn core(&self) -> &ChannelCore {
-        &self.core
-    }
+    // One table serves both: CH2 has no NR20, and `read_raw` returns $FF for it.
+    const READ_MASK: [u8; 5] = [0x80, 0x3F, 0x00, 0xFF, 0xBF];
 
-    fn core_mut(&mut self) -> &mut ChannelCore {
-        &mut self.core
-    }
+    core_accessors!();
 
-    fn read(&self, reg: usize) -> u8 {
-        todo!()
+    fn read_raw(&self, reg: usize) -> u8 {
+        match reg {
+            0 => self.sweep.as_ref().map_or(0xFF, |sweep| sweep.read()),
+            1 => self.duty.wave_duty() << 6,
+            2 => self.envelope.read(),
+            3 => 0, // write-only
+            _ => self.core.read_control(),
+        }
     }
 
     fn write(&mut self, reg: usize, value: u8, step: u8) {
@@ -56,11 +83,62 @@ impl Channel for Square {
         }
     }
 
-    fn power_off(&mut self, is_cgb: bool) {
-        todo!()
+    fn fresh(&self) -> Self {
+        if self.sweep.is_some() {
+            Self::ch1()
+        } else {
+            Self::ch2()
+        }
     }
 
     fn output(&self) -> u8 {
-        todo!()
+        if self.enabled() && self.duty.output() {
+            self.envelope.volume()
+        } else {
+            0
+        }
+    }
+
+    fn clock(&mut self) {
+        if !self.period.clock() {
+            return;
+        }
+        self.duty.clock();
+        self.envelope.clock();
+        if let Some(sweep) = &mut self.sweep {
+            sweep.clock(&mut self.period, &mut self.core);
+        }
+    }
+
+    fn clock_envelope(&mut self) {
+        self.envelope.clock();
+    }
+
+    fn clock_sweep(&mut self) {
+        if let Some(sweep) = &mut self.sweep {
+            sweep.clock(&mut self.period, &mut self.core);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unwritten_square_reads_its_mask() {
+        let ch1 = Square::ch1();
+        let regs: Vec<u8> = (0..5).map(|reg| ch1.read(reg)).collect();
+        assert_eq!(regs, [0x80, 0x3F, 0x00, 0xFF, 0xBF]);
+        assert_eq!(Square::ch2().read(0), 0xFF, "CH2 has no NR20");
+    }
+
+    #[test]
+    fn readable_bits_come_back_through_the_mask() {
+        let mut ch2 = Square::ch2();
+        ch2.write(1, 0x80, 0); // duty 2; the length bits are write-only
+        ch2.write(4, 0x40, 0); // length enable, no trigger
+        assert_eq!(ch2.read(1), 0xBF);
+        assert_eq!(ch2.read(4), 0xFF);
     }
 }

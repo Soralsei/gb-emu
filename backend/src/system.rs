@@ -83,7 +83,7 @@ impl System {
             bus_controller.clone(),
             is_cgb,
         ));
-        let apu = Rc::new(Apu::new());
+        let apu = Rc::new(Apu::new(is_cgb));
 
         let mut map = AddressMap::new();
 

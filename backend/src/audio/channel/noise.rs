@@ -1,4 +1,5 @@
 use crate::{
+    audio::channel::core_accessors,
     audio::channel::{Channel, ChannelCore},
     is_bit_set,
 };
@@ -36,22 +37,25 @@ impl RandomControl {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Noise {
     core: ChannelCore,
     random_control: RandomControl,
 }
 
+impl Default for Noise {
+    fn default() -> Self {
+        Self {
+            core: ChannelCore::new(64),
+            random_control: RandomControl::default(),
+        }
+    }
+}
+
 impl Channel for Noise {
-    fn core(&self) -> &ChannelCore {
-        &self.core
-    }
+    const READ_MASK: [u8; 5] = [0xFF, 0xFF, 0x00, 0x00, 0xBF];
 
-    fn core_mut(&mut self) -> &mut ChannelCore {
-        &mut self.core
-    }
-
-    fn read(&self, reg: usize) -> u8 {
+    fn read_raw(&self, reg: usize) -> u8 {
         todo!()
     }
 
@@ -59,11 +63,17 @@ impl Channel for Noise {
         todo!()
     }
 
-    fn power_off(&mut self, is_cgb: bool) {
+    fn fresh(&self) -> Self {
+        Self::default()
+    }
+
+    fn clock(&mut self) {
         todo!()
     }
 
     fn output(&self) -> u8 {
         todo!()
     }
+
+    core_accessors!();
 }
