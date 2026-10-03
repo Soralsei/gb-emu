@@ -31,11 +31,11 @@ impl NRx4 {
 }
 
 macro_rules! core_accessors {
-    () => {
-        fn core(&self) -> &$crate::audio::channel::ChannelCore {
+    ($MAX_LENGTH:literal) => {
+        fn core(&self) -> &$crate::audio::channel::ChannelCore<$MAX_LENGTH> {
             &self.core
         }
-        fn core_mut(&mut self) -> &mut $crate::audio::channel::ChannelCore {
+        fn core_mut(&mut self) -> &mut $crate::audio::channel::ChannelCore<$MAX_LENGTH> {
             &mut self.core
         }
     };
@@ -44,16 +44,16 @@ pub(crate) use core_accessors;
 
 /// Not object-safe (`READ_MASK`): the APU holds each channel by its concrete
 /// type, so every call is static.
-pub trait Channel: Sized {
+pub trait Channel<const MAX_LENGTH: u16>: Sized {
     /// Bits that read back as 1 (unused or write-only), NRx0..NRx4.
     const READ_MASK: [u8; 5];
 
-    fn core(&self) -> &ChannelCore;
-    fn core_mut(&mut self) -> &mut ChannelCore;
+    fn core(&self) -> &ChannelCore<MAX_LENGTH>;
+    fn core_mut(&mut self) -> &mut ChannelCore<MAX_LENGTH>;
 
     /// The register's stored bits only; `read` applies `READ_MASK`.
     fn read_raw(&self, reg: usize) -> u8;
-    fn write(&mut self, reg: usize, value: u8, step: u8); // step: NRx4 quirks
+    fn write(&mut self, reg: usize, value: u8, do_clock_length: bool); // step: NRx4 quirks
 
     fn read(&self, reg: usize) -> u8 {
         self.read_raw(reg) | Self::READ_MASK[reg]
@@ -69,10 +69,24 @@ pub trait Channel: Sized {
 
     fn clock(&mut self);
     fn output(&self) -> u8;
+    fn analog_output(&self) -> f32 {
+        let digital = self.output();
+        if self.core().dac {
+            // get value in [0.0, 2.0] from digital output (max is 15, so divide by 15 / 2)
+            // and convert to reversed [-1.0, 1.0] (digital 0 is 1.0 and digital 15 is -1.0)
+            1.0 - (digital as f32 / 7.5)
+        } else {
+            0.0
+        }
+    }
 
     fn enabled(&self) -> bool {
         self.core().enabled
     }
+    fn dac_enabled(&self) -> bool {
+        self.core().dac
+    }
+
     fn write_length(&mut self, value: u8) {
         self.core_mut().length.load(value)
     }
@@ -85,24 +99,22 @@ pub trait Channel: Sized {
 }
 
 #[derive(Debug)]
-struct Length {
+struct Length<const MAX_LENGTH: u16> {
     counter: u16,
     enabled: bool,
-    max: u16,
 }
 
-impl Length {
-    fn new(max: u16) -> Self {
+impl<const MAX_LENGTH: u16> Length<MAX_LENGTH> {
+    fn new() -> Self {
         Self {
             counter: 0,
             enabled: false,
-            max,
         }
     }
 
     pub fn trigger(&mut self) {
         if self.counter == 0 {
-            self.counter = self.max;
+            self.counter = MAX_LENGTH;
         }
     }
 
@@ -111,7 +123,7 @@ impl Length {
     }
 
     pub fn load(&mut self, value: u8) {
-        self.counter = self.max - (value as u16 & (self.max - 1));
+        self.counter = MAX_LENGTH - (value as u16 & (MAX_LENGTH - 1));
     }
 
     pub fn clock(&mut self) -> bool {
@@ -125,20 +137,19 @@ impl Length {
 }
 
 #[derive(Debug)]
-pub struct ChannelCore {
+pub struct ChannelCore<const MAX_LENGTH: u16> {
     enabled: bool,
     dac: bool,
-    length: Length,
+    length: Length<MAX_LENGTH>,
 }
 
-impl ChannelCore {
+impl<const MAX_LENGTH: u16> ChannelCore<MAX_LENGTH> {
     /// `length_max` is 64, or 256 for CH3. No `Default`: a zero max would make
-    /// `Length::load` underflow.
-    pub fn new(length_max: u16) -> Self {
+    pub fn new() -> Self {
         Self {
             enabled: false,
             dac: false,
-            length: Length::new(length_max),
+            length: Length::new(),
         }
     }
 
@@ -158,8 +169,9 @@ impl ChannelCore {
     }
 
     /// NRx4 bits 6–7.
-    pub fn write_control(&mut self, control: NRx4, step: u8) {
+    pub fn write_control(&mut self, control: NRx4, will_clock_length: bool) {
         self.length.enable(control.length_enable());
+        // TODO implement NRx4 quirk
         if control.trigger() {
             self.enabled = self.dac;
             self.length.trigger();

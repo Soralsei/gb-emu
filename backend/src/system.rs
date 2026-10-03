@@ -137,6 +137,10 @@ impl System {
             time.cpu.timeline(),
         ));
         time.spawn(Timer::task(timer.clone(), time.cpu.timeline()));
+
+        time.spawn(Apu::frame_sequencer_task(apu.clone(), timer.div_apu()));
+        time.spawn(Apu::generator_task(apu.clone(), time.fixed.timeline()));
+
         time.spawn(Cpu::task(
             cpu.clone(),
             interrupt_controller.clone(),

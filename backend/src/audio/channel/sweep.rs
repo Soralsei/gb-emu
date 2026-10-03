@@ -51,7 +51,7 @@ pub struct Sweep {
 }
 
 impl Sweep {
-    pub fn clock(&mut self, period: &mut Period, core: &mut ChannelCore) {
+    pub fn clock(&mut self, period: &mut Period<2>, core: &mut ChannelCore<64>) {
         self.counter = self.counter.saturating_sub(1);
         if self.counter != 0 {
             return;
@@ -71,7 +71,7 @@ impl Sweep {
         }
     }
 
-    fn calculate(&mut self, core: &mut ChannelCore) -> u16 {
+    fn calculate(&mut self, core: &mut ChannelCore<64>) -> u16 {
         let freq_shift = self.shadow_freq >> self.sweep_control.individual_step();
         let next = match self.sweep_control.direction() {
             SweepDirection::Increasing => self.shadow_freq + freq_shift,
@@ -86,7 +86,7 @@ impl Sweep {
         next
     }
 
-    pub fn write(&mut self, value: u8, core: &mut ChannelCore) {
+    pub fn write(&mut self, value: u8, core: &mut ChannelCore<64>) {
         let prev_direction = self.sweep_control.direction();
         self.sweep_control = SweepControl(value);
         // Obscure behavior:
@@ -109,8 +109,8 @@ impl Sweep {
         };
     }
 
-    pub fn trigger(&mut self, period: &Period, core: &mut ChannelCore) {
-        self.shadow_freq = period.freq();
+    pub fn trigger(&mut self, period: &Period<2>, core: &mut ChannelCore<64>) {
+        self.shadow_freq = period.period();
         self.negated = false;
         self.reload();
         self.enabled = self.sweep_control.pace() != 0 || self.sweep_control.individual_step() != 0;

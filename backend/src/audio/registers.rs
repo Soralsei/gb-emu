@@ -49,4 +49,12 @@ impl AudioRegisters {
             _ => self.master_volume = MasterVolume(value),
         }
     }
+
+    pub fn master_volume(&self) -> MasterVolume {
+        self.master_volume
+    }
+
+    pub fn panning(&self) -> Panning {
+        self.panning
+    }
 }

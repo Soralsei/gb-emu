@@ -5,6 +5,12 @@ macro_rules! is_bit_set {
         ($value & (1 << $bit)) != 0
     };
 }
+#[macro_export]
+macro_rules! bit_value {
+    ($value:expr, $bit:expr) => {
+        ($value >> ($bit - 1) & 0x1)
+    };
+}
 
 #[inline(always)]
 pub fn bytes_to_word(msb: u8, lsb: u8) -> u16 {

@@ -7,10 +7,10 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Square {
-    core: ChannelCore,
+    core: ChannelCore<64>,
     duty: Duty,
     envelope: Envelope,
-    period: Period,
+    period: Period<2>,
     sweep: Option<Sweep>, // CH1 only
 }
 
@@ -26,7 +26,7 @@ impl Square {
     /// CH2: no sweep, so NR20 reads $FF.
     pub fn ch2() -> Self {
         Self {
-            core: ChannelCore::new(64),
+            core: ChannelCore::new(),
             duty: Duty::default(),
             envelope: Envelope::default(),
             period: Period::default(),
@@ -35,13 +35,16 @@ impl Square {
     }
 }
 
-impl Channel for Square {
+impl Channel<64> for Square {
     // One table serves both: CH2 has no NR20, and `read_raw` returns $FF for it.
     const READ_MASK: [u8; 5] = [0x80, 0x3F, 0x00, 0xFF, 0xBF];
 
-    core_accessors!();
-
     fn read_raw(&self, reg: usize) -> u8 {
+        debug_assert!(
+            reg <= 4,
+            "[Square::read_raw] reg value should never be > 4, got {}",
+            reg
+        );
         match reg {
             0 => self.sweep.as_ref().map_or(0xFF, |sweep| sweep.read()),
             1 => self.duty.wave_duty() << 6,
@@ -51,7 +54,12 @@ impl Channel for Square {
         }
     }
 
-    fn write(&mut self, reg: usize, value: u8, step: u8) {
+    fn write(&mut self, reg: usize, value: u8, do_clock_length: bool) {
+        debug_assert!(
+            reg <= 4,
+            "[Square::write] reg value should never be > 4, got {}",
+            reg
+        );
         match reg {
             0 => {
                 if let Some(sweep) = &mut self.sweep {
@@ -71,7 +79,7 @@ impl Channel for Square {
                 let control = NRx4(value);
                 // before trigger: trigger uses the new period
                 self.period.write_high(control.period());
-                self.core.write_control(control, step);
+                self.core.write_control(control, do_clock_length);
                 if control.trigger() {
                     self.envelope.trigger();
                     self.period.reload();
@@ -91,6 +99,12 @@ impl Channel for Square {
         }
     }
 
+    fn clock(&mut self) {
+        if self.enabled() && self.period.clock() {
+            self.duty.clock();
+        }
+    }
+
     fn output(&self) -> u8 {
         if self.enabled() && self.duty.output() {
             self.envelope.volume()
@@ -99,12 +113,7 @@ impl Channel for Square {
         }
     }
 
-    fn clock(&mut self) {
-        if !self.period.clock() {
-            return;
-        }
-        self.duty.clock();
-        self.envelope.clock();
+    fn clock_sweep(&mut self) {
         if let Some(sweep) = &mut self.sweep {
             sweep.clock(&mut self.period, &mut self.core);
         }
@@ -114,11 +123,7 @@ impl Channel for Square {
         self.envelope.clock();
     }
 
-    fn clock_sweep(&mut self) {
-        if let Some(sweep) = &mut self.sweep {
-            sweep.clock(&mut self.period, &mut self.core);
-        }
-    }
+    core_accessors!(64);
 }
 
 #[cfg(test)]
@@ -136,8 +141,8 @@ mod tests {
     #[test]
     fn readable_bits_come_back_through_the_mask() {
         let mut ch2 = Square::ch2();
-        ch2.write(1, 0x80, 0); // duty 2; the length bits are write-only
-        ch2.write(4, 0x40, 0); // length enable, no trigger
+        ch2.write(1, 0x80, false); // duty 2; the length bits are write-only
+        ch2.write(4, 0x40, false); // length enable, no trigger
         assert_eq!(ch2.read(1), 0xBF);
         assert_eq!(ch2.read(4), 0xFF);
     }
