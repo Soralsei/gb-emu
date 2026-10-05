@@ -1,5 +1,5 @@
-use backend::system::System;
-use backend::{SCREEN_H, SCREEN_W};
+use yargem_lib::system::System;
+use yargem_lib::{SCREEN_H, SCREEN_W};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

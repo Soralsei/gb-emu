@@ -1,4 +1,4 @@
-use std::{cell::RefCell, convert::Infallible, ops::Add, rc::Rc};
+use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use crate::{
     audio::{
@@ -8,6 +8,7 @@ use crate::{
     clock::{Pulse, Timeline},
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
+    util::containers::CircularBuffer,
 };
 
 /// Runs `$body` once per channel, with `$ch` bound to each concrete field:
@@ -34,31 +35,33 @@ macro_rules! each_channel {
 }
 
 #[derive(Debug)]
-struct BoxFilterf {
-    acc: f32,
+struct BoxFilterI {
+    acc: i32,
     count: usize,
 }
 
-impl BoxFilterf {
+impl BoxFilterI {
     pub fn new() -> Self {
-        Self { acc: 0.0, count: 0 }
+        Self { acc: 0, count: 0 }
     }
 
-    pub fn add(&mut self, value: f32) {
+    pub fn add(&mut self, value: i32) {
         self.acc += value;
         self.count += 1;
     }
 
     pub fn output(&mut self) -> f32 {
-        let acc = std::mem::take(&mut self.acc);
+        let acc = self.acc;
         let count = self.count;
         self.count = 0;
-        acc / (count as f32)
+        self.acc = 0;
+        (acc as f32) / (count as f32)
     }
 }
 
 const BASE_FACTOR: f32 = 0.999958;
 const BASE_FACTOR_CGB: f32 = 0.998943;
+const SAMPLE_BUFFER_SIZE: usize = 8192;
 
 #[derive(Debug)]
 struct ApuState {
@@ -76,11 +79,10 @@ struct ApuState {
     high_pass_cap_right: f32,
     charge_factor: f32,
 
-    left_acc: BoxFilterf,
-    right_acc: BoxFilterf,
+    left_acc: BoxFilterI,
+    right_acc: BoxFilterI,
 
-    sample_buff_left: f32,
-    sample_buff_right: f32,
+    samples: Box<CircularBuffer<[f32; 2], SAMPLE_BUFFER_SIZE>>,
 }
 
 pub struct Apu {
@@ -132,6 +134,15 @@ impl Apu {
             step_counter = (step_counter + 1) & 0x1F;
         }
     }
+
+    pub fn drain_samples(&self, max: usize, sink: impl FnMut([f32; 2])) {
+        self.state
+            .borrow_mut()
+            .samples
+            .drain()
+            .take(max)
+            .for_each(sink);
+    }
 }
 
 impl ApuState {
@@ -153,10 +164,9 @@ impl ApuState {
             high_pass_cap_left: 0.0,
             high_pass_cap_right: 0.0,
             charge_factor,
-            left_acc: BoxFilterf::new(),
-            right_acc: BoxFilterf::new(),
-            sample_buff_left: 0.0,
-            sample_buff_right: 0.0,
+            left_acc: BoxFilterI::new(),
+            right_acc: BoxFilterI::new(),
+            samples: CircularBuffer::new_boxed(),
         }
     }
 
@@ -243,10 +253,10 @@ impl ApuState {
         let panning = self.registers.panning();
         let master_volume = self.registers.master_volume();
         let outputs = [
-            self.ch1.analog_output(),
-            self.ch2.analog_output(),
-            self.ch3.analog_output(),
-            self.ch4.analog_output(),
+            self.ch1.dac_output(),
+            self.ch2.dac_output(),
+            self.ch3.dac_output(),
+            self.ch4.dac_output(),
         ];
 
         // TODO: Add VIN mixing
@@ -254,15 +264,15 @@ impl ApuState {
         let left = outputs
             .iter()
             .enumerate()
-            .map(|(i, output)| if panning.left(i) { *output } else { 0.0 })
-            .sum::<f32>()
-            * (master_volume.volume_left() + 1) as f32;
+            .map(|(i, output)| if panning.left(i) { *output } else { 0 })
+            .sum::<i32>()
+            * (master_volume.volume_left() + 1) as i32;
         let right = outputs
             .iter()
             .enumerate()
-            .map(|(i, output)| if panning.right(i) { *output } else { 0.0 })
-            .sum::<f32>()
-            * (master_volume.volume_right() + 1) as f32;
+            .map(|(i, output)| if panning.right(i) { *output } else { 0 })
+            .sum::<i32>()
+            * (master_volume.volume_right() + 1) as i32;
 
         self.left_acc.add(left);
         self.right_acc.add(right);
@@ -280,25 +290,27 @@ impl ApuState {
             || self.ch4.dac_enabled();
 
         // Linear up to the filter, so scaling here equals scaling every tick.
-        let left = self.left_acc.output() / 32.0;
-        let right = self.right_acc.output() / 32.0;
+        let left = self.left_acc.output() / 15.0 * 32.0;
+        let right = self.right_acc.output() / 15.0 * 32.0;
 
         // Clamp after the filter: its input is already within ±1, the
         // overshoot on a DC step happens inside it.
-        self.sample_buff_left = Apu::hpf(
-            left,
-            any_dac,
-            &mut self.high_pass_cap_left,
-            self.charge_factor,
-        )
-        .clamp(-1.0, 1.0);
-        self.sample_buff_right = Apu::hpf(
-            right,
-            any_dac,
-            &mut self.high_pass_cap_right,
-            self.charge_factor,
-        )
-        .clamp(-1.0, 1.0);
+        self.samples.push_overwrite([
+            Apu::hpf(
+                left,
+                any_dac,
+                &mut self.high_pass_cap_left,
+                self.charge_factor,
+            )
+            .clamp(-1.0, 1.0),
+            Apu::hpf(
+                right,
+                any_dac,
+                &mut self.high_pass_cap_right,
+                self.charge_factor,
+            )
+            .clamp(-1.0, 1.0),
+        ]);
     }
 }
 

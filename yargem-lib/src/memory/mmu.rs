@@ -51,14 +51,14 @@ pub struct Mmu {
     /// of `[u8; 0x10000]`. Interior mutability is what lets the bus be shared as
     /// an `Rc<Mmu>`: a clocked device (OAM DMA, the PPU fetcher) only ever holds
     /// `&Mmu`, and still has to be able to drive a write.
-    memory: [Cell<u8>; 0x10000],
+    memory: Box<[Cell<u8>]>,
 }
 
 impl Mmu {
     pub fn new(address_map: AddressMap) -> Mmu {
         Mmu {
             handlers: address_map,
-            memory: [const { Cell::new(0) }; 0x10000],
+            memory: vec![Cell::new(0u8); 0x10000].into_boxed_slice(),
         }
     }
 

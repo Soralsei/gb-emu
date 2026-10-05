@@ -69,14 +69,13 @@ pub trait Channel<const MAX_LENGTH: u16>: Sized {
 
     fn clock(&mut self);
     fn output(&self) -> u8;
-    fn analog_output(&self) -> f32 {
-        let digital = self.output();
+    fn dac_output(&self) -> i32 {
         if self.core().dac {
             // get value in [0.0, 2.0] from digital output (max is 15, so divide by 15 / 2)
             // and convert to reversed [-1.0, 1.0] (digital 0 is 1.0 and digital 15 is -1.0)
-            1.0 - (digital as f32 / 7.5)
+            15 - 2 * self.output() as i32
         } else {
-            0.0
+            0
         }
     }
 

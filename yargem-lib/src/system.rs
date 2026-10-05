@@ -51,6 +51,7 @@ impl MemoryHandler for Unmapped {
 pub struct System {
     cpu: Rc<Cpu>,
     ppu: Rc<Ppu>,
+    apu: Rc<Apu>,
     mmu: Rc<Mmu>,
     time: Time,
     joypad: Rc<JoypadHandler>,
@@ -152,6 +153,7 @@ impl System {
         Self {
             cpu,
             ppu,
+            apu,
             mmu,
             time,
             joypad,
@@ -176,6 +178,10 @@ impl System {
 
     pub fn get_framebuffer(&self) -> Ref<'_, Frame> {
         self.ppu.framebuffer()
+    }
+
+    pub fn drain_audio(&self, max: usize, sink: impl FnMut([f32; 2])) {
+        self.apu.drain_samples(max, sink);
     }
 
     pub fn set_button(&mut self, btn: Button, down: bool) {

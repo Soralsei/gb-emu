@@ -1,4 +1,4 @@
-use backend::system::System;
+use yargem_lib::system::System;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
