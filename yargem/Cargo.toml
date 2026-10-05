@@ -1,0 +1,17 @@
+[package]
+name = "yargem"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+minifb = "0.28.0"
+yargem-lib = { path = "../yargem-lib/" }
+clap = "4.6.6"
+eframe = "0.36.2"
+egui = "0.36.2"
+rtrb = "0.4.0"
+cpal = "0.18.2"
+triple_buffer = "9.0.0"
+anyhow = "1.0.104"

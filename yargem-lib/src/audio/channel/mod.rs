@@ -1,0 +1,196 @@
+#![allow(dead_code)]
+use crate::is_bit_set;
+
+mod duty;
+mod envelope;
+mod noise;
+mod period;
+mod square;
+mod sweep;
+mod wave;
+
+pub use noise::Noise;
+pub use square::Square;
+pub use wave::Wave;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NRx4(u8);
+
+impl NRx4 {
+    pub fn trigger(&self) -> bool {
+        is_bit_set!(self.0, 7)
+    }
+
+    pub fn length_enable(&self) -> bool {
+        is_bit_set!(self.0, 6)
+    }
+
+    pub fn period(&self) -> u8 {
+        self.0 & 0x7
+    }
+}
+
+macro_rules! core_accessors {
+    ($MAX_LENGTH:literal) => {
+        fn core(&self) -> &$crate::audio::channel::ChannelCore<$MAX_LENGTH> {
+            &self.core
+        }
+        fn core_mut(&mut self) -> &mut $crate::audio::channel::ChannelCore<$MAX_LENGTH> {
+            &mut self.core
+        }
+    };
+}
+pub(crate) use core_accessors;
+
+/// Not object-safe (`READ_MASK`): the APU holds each channel by its concrete
+/// type, so every call is static.
+pub trait Channel<const MAX_LENGTH: u16>: Sized {
+    /// Bits that read back as 1 (unused or write-only), NRx0..NRx4.
+    const READ_MASK: [u8; 5];
+
+    fn core(&self) -> &ChannelCore<MAX_LENGTH>;
+    fn core_mut(&mut self) -> &mut ChannelCore<MAX_LENGTH>;
+
+    /// The register's stored bits only; `read` applies `READ_MASK`.
+    fn read_raw(&self, reg: usize) -> u8;
+    fn write(&mut self, reg: usize, value: u8, do_clock_length: bool); // step: NRx4 quirks
+
+    fn read(&self, reg: usize) -> u8 {
+        self.read_raw(reg) | Self::READ_MASK[reg]
+    }
+
+    fn fresh(&self) -> Self;
+
+    fn power_off(&mut self, is_cgb: bool) {
+        let fresh = self.fresh();
+        let old = std::mem::replace(self, fresh);
+        self.core_mut().keep_through_power_off(old.core(), is_cgb);
+    }
+
+    fn clock(&mut self);
+    fn output(&self) -> u8;
+    fn dac_output(&self) -> i32 {
+        if self.core().dac {
+            // get value in [0.0, 2.0] from digital output (max is 15, so divide by 15 / 2)
+            // and convert to reversed [-1.0, 1.0] (digital 0 is 1.0 and digital 15 is -1.0)
+            15 - 2 * self.output() as i32
+        } else {
+            0
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.core().enabled
+    }
+    fn dac_enabled(&self) -> bool {
+        self.core().dac
+    }
+
+    fn write_length(&mut self, value: u8) {
+        self.core_mut().length.load(value)
+    }
+
+    fn clock_length(&mut self) {
+        self.core_mut().clock_length()
+    }
+    fn clock_sweep(&mut self) {} // CH1 overrides
+    fn clock_envelope(&mut self) {} // CH1, CH2, CH4 override
+}
+
+#[derive(Debug)]
+struct Length<const MAX_LENGTH: u16> {
+    counter: u16,
+    enabled: bool,
+}
+
+impl<const MAX_LENGTH: u16> Length<MAX_LENGTH> {
+    fn new() -> Self {
+        Self {
+            counter: 0,
+            enabled: false,
+        }
+    }
+
+    pub fn trigger(&mut self, extra_clock: bool) {
+        if self.counter == 0 {
+            self.counter = MAX_LENGTH - (extra_clock && self.enabled) as u16;
+        }
+    }
+
+    pub fn enable(&mut self, enabled: bool, extra_clock: bool) -> bool {
+        let clock_now = extra_clock && !self.enabled && enabled && self.counter != 0;
+        self.enabled = enabled;
+        if clock_now {
+            self.counter -= 1;
+            return self.counter == 0;
+        }
+        false
+    }
+
+    pub fn load(&mut self, value: u8) {
+        self.counter = MAX_LENGTH - (value as u16 & (MAX_LENGTH - 1));
+    }
+
+    pub fn clock(&mut self) -> bool {
+        if self.enabled && self.counter > 0 {
+            self.counter = self.counter.saturating_sub(1);
+            self.counter == 0
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ChannelCore<const MAX_LENGTH: u16> {
+    enabled: bool,
+    dac: bool,
+    length: Length<MAX_LENGTH>,
+}
+
+impl<const MAX_LENGTH: u16> ChannelCore<MAX_LENGTH> {
+    /// `length_max` is 64, or 256 for CH3. No `Default`: a zero max would make
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            dac: false,
+            length: Length::new(),
+        }
+    }
+
+    pub fn set_dac(&mut self, on: bool) {
+        self.dac = on;
+        self.enabled &= on;
+    }
+
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    pub fn clock_length(&mut self) {
+        if self.length.clock() {
+            self.enabled = false;
+        }
+    }
+
+    /// NRx4 bits 6–7.
+    pub fn write_control(&mut self, control: NRx4, extra_clock: bool) {
+        let length_zero = self.length.enable(control.length_enable(), extra_clock);
+        if control.trigger() {
+            self.enabled = self.dac;
+            self.length.trigger(extra_clock);
+        } else if length_zero {
+            self.enabled = false;
+        }
+    }
+
+    pub fn read_control(&self) -> u8 {
+        (self.length.enabled as u8) << 6
+    }
+
+    pub fn keep_through_power_off(&mut self, old: &Self, is_cgb: bool) {
+        if !is_cgb {
+            self.length.counter = old.length.counter;
+        }
+    }
+}

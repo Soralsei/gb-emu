@@ -1,4 +1,5 @@
 /target
-cpu_instrs
+gb-test-roms/
+
 .vscode
 backlog*.txt
