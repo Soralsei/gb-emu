@@ -1,4 +1,11 @@
-use cpal::{traits::HostTrait, Device, Host};
+use std::sync::Arc;
+
+use anyhow::Context;
+use cpal::{
+    traits::{DeviceTrait, HostTrait},
+    Device, Host, Stream, StreamConfig,
+};
+use egui::mutex::Mutex;
 use yargem_lib::SAMPLE_RATE;
 
 const FRAME_BURST: usize = 70224 / 64; // source frames per run_frame
@@ -8,14 +15,19 @@ const CAPACITY: usize = 8192;
 
 pub struct AudioManager {
     host: Host,
-    out_device: Option<Device>,
+    out_device: Arc<Mutex<Option<Device>>>,
+    out_stream: Option<Stream>,
 }
 
 impl AudioManager {
     pub fn new() -> Self {
         let host = cpal::default_host();
         let out_device = host.default_output_device();
-        Self { host, out_device }
+        Self {
+            host,
+            out_device: Arc::new(Mutex::new(out_device)),
+            out_stream: None,
+        }
     }
 
     pub fn devices(&self) -> Result<cpal::Devices, cpal::Error> {
@@ -23,12 +35,34 @@ impl AudioManager {
     }
 
     pub fn set_out_device(&mut self, device: Option<cpal::Device>) {
-        self.out_device = device;
+        self.out_stream = None;
+        let mut out_device = self.out_device.lock();
+        *out_device = device;
     }
 
-    fn target_fill(callback_frames: usize, device_rate: u32) -> usize {
+    fn audio_waterline(callback_frames: usize, device_rate: u32) -> usize {
         let callback_burst =
-            (callback_frames as f64 * SAMPLE_RATE / device_rate as f64).ceil() as usize;
+            ((callback_frames * SAMPLE_RATE as usize) as f64 / device_rate as f64).ceil() as usize;
         (callback_burst + FRAME_BURST + JITTER_MARGIN).min(CAPACITY - FRAME_BURST)
+    }
+
+    pub fn start_stream(
+        &mut self,
+        config: StreamConfig,
+        error_cb: impl FnMut(cpal::Error) + std::marker::Send + 'static,
+    ) -> anyhow::Result<()> {
+        if let Some(device) = &*self.out_device.lock() {
+            self.out_stream = Some(
+                device
+                    .build_output_stream(
+                        config,
+                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {},
+                        error_cb,
+                        None,
+                    )
+                    .context("Failed to initialize out stream")?,
+            );
+        }
+        Ok(())
     }
 }

@@ -111,14 +111,20 @@ impl<const MAX_LENGTH: u16> Length<MAX_LENGTH> {
         }
     }
 
-    pub fn trigger(&mut self) {
+    pub fn trigger(&mut self, extra_clock: bool) {
         if self.counter == 0 {
-            self.counter = MAX_LENGTH;
+            self.counter = MAX_LENGTH - (extra_clock && self.enabled) as u16;
         }
     }
 
-    pub fn enable(&mut self, enabled: bool) {
+    pub fn enable(&mut self, enabled: bool, extra_clock: bool) -> bool {
+        let clock_now = extra_clock && !self.enabled && enabled && self.counter != 0;
         self.enabled = enabled;
+        if clock_now {
+            self.counter -= 1;
+            return self.counter == 0;
+        }
+        false
     }
 
     pub fn load(&mut self, value: u8) {
@@ -168,12 +174,13 @@ impl<const MAX_LENGTH: u16> ChannelCore<MAX_LENGTH> {
     }
 
     /// NRx4 bits 6–7.
-    pub fn write_control(&mut self, control: NRx4, will_clock_length: bool) {
-        self.length.enable(control.length_enable());
-        // TODO implement NRx4 quirk
+    pub fn write_control(&mut self, control: NRx4, extra_clock: bool) {
+        let length_zero = self.length.enable(control.length_enable(), extra_clock);
         if control.trigger() {
             self.enabled = self.dac;
-            self.length.trigger();
+            self.length.trigger(extra_clock);
+        } else if length_zero {
+            self.enabled = false;
         }
     }
 

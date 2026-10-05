@@ -54,7 +54,7 @@ impl Channel<64> for Square {
         }
     }
 
-    fn write(&mut self, reg: usize, value: u8, do_clock_length: bool) {
+    fn write(&mut self, reg: usize, value: u8, extra_clock: bool) {
         debug_assert!(
             reg <= 4,
             "[Square::write] reg value should never be > 4, got {}",
@@ -79,7 +79,7 @@ impl Channel<64> for Square {
                 let control = NRx4(value);
                 // before trigger: trigger uses the new period
                 self.period.write_high(control.period());
-                self.core.write_control(control, do_clock_length);
+                self.core.write_control(control, extra_clock);
                 if control.trigger() {
                     self.envelope.trigger();
                     self.period.reload();

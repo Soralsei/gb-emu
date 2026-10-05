@@ -2,4 +2,4 @@ pub mod apu;
 mod channel;
 mod registers;
 
-pub const SAMPLE_RATE: f64 = 65536.0;
+pub const SAMPLE_RATE: u32 = 65536;

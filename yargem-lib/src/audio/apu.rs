@@ -180,12 +180,21 @@ impl ApuState {
     }
 
     fn write(&mut self, channel: usize, reg: usize, value: u8) {
-        let will_clock_next = self.will_clock_length_next();
+        let extra_clock = !self.will_clock_length_next();
         match channel {
-            0 => self.ch1.write(reg, value, !will_clock_next),
-            1 => self.ch2.write(reg, value, !will_clock_next),
-            2 => self.ch3.write(reg, value, !will_clock_next),
-            _ => self.ch4.write(reg, value, !will_clock_next),
+            0 => self.ch1.write(reg, value, extra_clock),
+            1 => self.ch2.write(reg, value, extra_clock),
+            2 => self.ch3.write(reg, value, extra_clock),
+            _ => self.ch4.write(reg, value, extra_clock),
+        }
+    }
+
+    fn write_length(&mut self, channel: usize, value: u8) {
+        match channel {
+            0 => self.ch1.write_length(value),
+            1 => self.ch2.write_length(value),
+            2 => self.ch3.write_length(value),
+            _ => self.ch4.write_length(value),
         }
     }
 
@@ -290,8 +299,8 @@ impl ApuState {
             || self.ch4.dac_enabled();
 
         // Linear up to the filter, so scaling here equals scaling every tick.
-        let left = self.left_acc.output() / 15.0 * 32.0;
-        let right = self.right_acc.output() / 15.0 * 32.0;
+        let left = self.left_acc.output() / (15.0 * 32.0);
+        let right = self.right_acc.output() / (15.0 * 32.0);
 
         // Clamp after the filter: its input is already within ±1, the
         // overshoot on a DC step happens inside it.
@@ -337,8 +346,10 @@ impl MemoryHandler for Apu {
             (_, 0xFF30..=0xFF3F) => state.ch3.write_wave(address, value),
             (powered, 0xFF10..=0xFF23) => {
                 let (channel, reg) = Apu::split(address);
-                if powered || (!state.is_cgb && reg == 1) {
+                if powered {
                     state.write(channel, reg, value);
+                } else if !state.is_cgb && reg == 1 {
+                    state.write_length(channel, value);
                 }
             }
             (true, 0xFF24..=0xFF25) => {

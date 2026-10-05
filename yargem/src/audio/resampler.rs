@@ -1,5 +1,3 @@
-use std::mem::swap;
-
 #[derive(Clone, Copy, Default)]
 pub struct StereoFrame {
     pub left: f32,
@@ -28,7 +26,7 @@ impl LinearResampler {
     }
 
     fn advance(&mut self, pull: &mut impl FnMut() -> Option<StereoFrame>) {
-        swap(&mut self.prev, &mut self.next);
+        self.prev = self.next;
         if let Some(frame) = pull() {
             self.next = frame;
         }
