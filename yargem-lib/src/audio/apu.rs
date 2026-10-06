@@ -5,7 +5,7 @@ use crate::{
         channel::{Channel, Noise, Square, Wave},
         registers::AudioRegisters,
     },
-    clock::{Pulse, Timeline},
+    clock::{Fixed, Pulse, Timeline},
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
     util::containers::CircularBuffer,
@@ -123,7 +123,7 @@ impl Apu {
         }
     }
 
-    pub async fn generator_task(this: Rc<Apu>, timeline: Timeline) -> Infallible {
+    pub async fn generator_task(this: Rc<Apu>, timeline: Timeline<Fixed>) -> Infallible {
         let mut step_counter = 0;
         loop {
             timeline.wait(2).await;

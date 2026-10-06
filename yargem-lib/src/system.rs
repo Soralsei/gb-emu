@@ -2,7 +2,7 @@ use std::cell::Ref;
 use std::rc::Rc;
 
 use crate::audio::apu::Apu;
-use crate::clock::{CpuClock, Time};
+use crate::clock::{self, CpuClock, Time, Timeline};
 use crate::graphics::oam::DMAController;
 use crate::graphics::ppu::{Frame, Ppu};
 use crate::input::{Button, JoypadHandler};
@@ -52,7 +52,6 @@ pub struct System {
     cpu: Rc<Cpu>,
     ppu: Rc<Ppu>,
     apu: Rc<Apu>,
-    mmu: Rc<Mmu>,
     time: Time,
     joypad: Rc<JoypadHandler>,
 }
@@ -130,31 +129,36 @@ impl System {
         map.add((0xFFFF, 0xFFFF), interrupt_controller.clone());
         let mmu = Rc::new(Mmu::new(map));
 
-        time.spawn(Ppu::task(ppu.clone(), time.fixed.timeline()));
-        time.spawn(Serial::task(serial.clone(), time.cpu.timeline()));
-        time.spawn(DMAController::task(
-            dma.clone(),
-            mmu.clone(),
-            time.cpu.timeline(),
-        ));
-        time.spawn(Timer::task(timer.clone(), time.cpu.timeline()));
+        time.spawn(|timeline| Ppu::task(ppu.clone(), timeline));
+        time.spawn(|timeline| Serial::task(serial.clone(), timeline));
+        time.spawn(|timeline| DMAController::task(dma.clone(), mmu.clone(), timeline));
+        time.spawn(|timeline| Timer::task(timer.clone(), timeline));
 
-        time.spawn(Apu::frame_sequencer_task(apu.clone(), timer.div_apu()));
-        time.spawn(Apu::generator_task(apu.clone(), time.fixed.timeline()));
+        time.spawn(|_: Timeline<clock::Cpu>| {
+            Apu::frame_sequencer_task(apu.clone(), timer.div_apu())
+        });
+        time.spawn(|timeline| Apu::generator_task(apu.clone(), timeline));
 
-        time.spawn(Cpu::task(
-            cpu.clone(),
-            interrupt_controller.clone(),
-            CpuBus::new(mmu.clone(), bus_controller.clone()),
-            time.cpu.clone(),
-            time.fixed.clone(),
-        ));
+        let cpu_clock = time.cpu.clone();
+        let fixed_clock = time.fixed.clone();
+        let cpu_clone = cpu.clone();
+
+        time.spawn(move |(t_cpu, t_fixed)| {
+            Cpu::task(
+                cpu_clone,
+                interrupt_controller.clone(),
+                CpuBus::new(mmu.clone(), bus_controller.clone()),
+                t_cpu,
+                t_fixed,
+                cpu_clock,
+                fixed_clock,
+            )
+        });
 
         Self {
             cpu,
             ppu,
             apu,
-            mmu,
             time,
             joypad,
         }

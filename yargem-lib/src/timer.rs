@@ -1,7 +1,7 @@
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use crate::{
-    clock::{CpuClock, Cycles, Pulse, Timeline, M_CYCLE},
+    clock::{Cpu, CpuClock, Cycles, Pulse, Timeline, M_CYCLE},
     cpu::interrupt::InterruptRequest,
     is_bit_set,
     memory::mmu::{MemoryHandler, MemoryRead, MemoryWrite},
@@ -47,7 +47,7 @@ impl Timer {
         self.div_apu.clone()
     }
 
-    pub async fn task(this: Rc<Self>, timeline: Timeline) -> Infallible {
+    pub async fn task(this: Rc<Self>, timeline: Timeline<Cpu>) -> Infallible {
         loop {
             timeline.wait(M_CYCLE as Cycles).await;
             let mut state = this.state.borrow_mut();

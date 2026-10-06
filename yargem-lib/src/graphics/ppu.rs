@@ -4,7 +4,7 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 
-use crate::clock::Timeline;
+use crate::clock::{Fixed, Timeline};
 use crate::cpu::interrupt::InterruptRequest;
 use crate::graphics::attributes::{BgAttributes, CGBBank, ObjectAttribute, TilePriority};
 use crate::graphics::fifo::{BgFIFO, ObjFIFO, Pixel};
@@ -137,7 +137,7 @@ impl Ppu {
         }
     }
 
-    pub async fn task(this: Rc<Self>, timeline: Timeline) -> Infallible {
+    pub async fn task(this: Rc<Self>, timeline: Timeline<Fixed>) -> Infallible {
         loop {
             if !this.registers.borrow().lcdc().lcd_ppu_enable {
                 this.registers.borrow_mut().set_ly(0);
@@ -281,7 +281,7 @@ impl Ppu {
         self.frame_ready.replace(false)
     }
 
-    async fn oam_scan(&self, ly: u8, timeline: &Timeline) -> Vec<ScannedObject> {
+    async fn oam_scan(&self, ly: u8, timeline: &Timeline<Fixed>) -> Vec<ScannedObject> {
         let mut selected = Vec::with_capacity(10);
         for i in 0..40 {
             timeline.wait(2).await;
@@ -306,7 +306,12 @@ impl Ppu {
         selected
     }
 
-    async fn draw_line(&self, ly: u8, objects: &[ScannedObject], timeline: &Timeline) -> u64 {
+    async fn draw_line(
+        &self,
+        ly: u8,
+        objects: &[ScannedObject],
+        timeline: &Timeline<Fixed>,
+    ) -> u64 {
         let start = timeline.position();
         let state = LineState::new(ly);
 
@@ -323,7 +328,7 @@ impl Ppu {
         timeline.position() - start
     }
 
-    async fn fetcher(&self, state: &LineState, timeline: Timeline) {
+    async fn fetcher(&self, state: &LineState, timeline: Timeline<Fixed>) {
         let mut fetcher_x = 0;
         let mut window = false;
         loop {
@@ -382,7 +387,7 @@ impl Ppu {
     /// completion rather than on acceptance: it is what holds the shifter
     /// suspended, so releasing it early would let the shifter pop an OBJ FIFO
     /// the merge has not reached yet. Returns whether a fetch ran.
-    async fn take_object_request(&self, state: &LineState, timeline: &Timeline) -> bool {
+    async fn take_object_request(&self, state: &LineState, timeline: &Timeline<Fixed>) -> bool {
         let Some(req) = state.obj_request.get() else {
             return false;
         };
@@ -391,7 +396,7 @@ impl Ppu {
         true
     }
 
-    async fn fetch_object(&self, req: ObjRequest, state: &LineState, t: &Timeline) {
+    async fn fetch_object(&self, req: ObjRequest, state: &LineState, t: &Timeline<Fixed>) {
         // Objects always use 0x8000 addressing, whatever LCDC bit 4 says.
         let addr = (req.tile as u16 * 16 + req.fine_y as u16 * 2) as usize;
         let bank = if self.is_cgb { req.bank as usize } else { 0 };
@@ -432,7 +437,7 @@ impl Ppu {
         tile: u8,
         fine_y: u8,
         bank: u8,
-        timeline: &Timeline,
+        timeline: &Timeline<Fixed>,
     ) -> (u8, u8) {
         let lcdc = self.registers.borrow().lcdc();
         let tile_area = lcdc.bg_window_tiles_area;
@@ -451,7 +456,7 @@ impl Ppu {
         (tile_low, tile_high)
     }
 
-    async fn shifter(&self, objects: &[ScannedObject], state: &LineState, t: Timeline) {
+    async fn shifter(&self, objects: &[ScannedObject], state: &LineState, t: Timeline<Fixed>) {
         let obj_size = self.registers.borrow().lcdc().obj_size;
         let lcdc_obj_enable = self.registers.borrow().lcdc().obj_enable;
         let mut discard = self.registers.borrow().scx() & 7;
@@ -634,7 +639,7 @@ mod tests {
                 Rc::new(BusController::new()),
                 false,
             ));
-            time.spawn(Ppu::task(ppu.clone(), time.fixed.timeline()));
+            time.spawn(|timeline: Timeline<Fixed>| Ppu::task(ppu.clone(), timeline));
             Self {
                 time,
                 ppu,

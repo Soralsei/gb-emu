@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use super::registers::Registers;
-use crate::clock::{CpuClock, FixedClock, Timeline, M_CYCLE};
+use crate::clock::{self, CpuClock, FixedClock, Timeline, M_CYCLE};
 use crate::cpu::instructions::{execute_prefixed, execute_unprefixed};
 use crate::cpu::interrupt::InterruptController;
 use crate::cpu::registers::{Flags, Reg16, Reg8};
@@ -46,12 +46,14 @@ impl Cpu {
         cpu: Rc<Cpu>,
         irq: Rc<InterruptController>,
         bus: CpuBus,
+        t: Timeline<clock::Cpu>,
+        t_fixed: Timeline<clock::Fixed>,
         clock: Rc<CpuClock>,
         fixed_clock: Rc<FixedClock>,
     ) -> Infallible {
         let task = CpuTask {
-            t: clock.timeline(),
-            fixed: fixed_clock.timeline(),
+            t,
+            t_fixed,
             cpu,
             irq,
             bus,
@@ -82,8 +84,8 @@ pub struct CpuTask {
     bus: CpuBus,
     clock: Rc<CpuClock>,
     fixed_clock: Rc<FixedClock>,
-    t: Timeline,
-    fixed: Timeline,
+    t: Timeline<clock::Cpu>,
+    t_fixed: Timeline<clock::Fixed>,
 }
 
 impl CpuTask {
@@ -379,7 +381,7 @@ impl CpuTask {
             self.clock.stop();
 
             // The CPU sits out the next 2050 M-cycles
-            self.fixed.wait(2050 * M_CYCLE).await;
+            self.t_fixed.wait(2050 * M_CYCLE).await;
 
             self.clock.resume();
 

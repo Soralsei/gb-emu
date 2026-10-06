@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::convert::Infallible;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
@@ -12,25 +13,38 @@ pub const M_CYCLE: u64 = 4;
 pub type Cycles = u64;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 
-/// A task's view of time. Holds the clock's counter, not the `Time` itself:
+// Timeline domain tags
+#[derive(Clone)]
+pub struct Cpu;
+#[derive(Clone)]
+pub struct Fixed;
+
+pub(crate) trait TimeDomain {}
+
+impl TimeDomain for Cpu {}
+impl TimeDomain for Fixed {}
+
+/// A task's view of time. Holds the clock's counter :
 /// the clock owns the tasks, so an `Rc<Time>` in a task would be a cycle.
 /// Cloning shares the position, so a helper stays on its caller's timeline.
 #[derive(Clone)]
-pub struct Timeline {
+pub struct Timeline<D> {
+    tag: PhantomData<D>,
+    /// Represents the clock of the domain this timelines represents
     now: Rc<Cell<Cycles>>,
-    at: Rc<Cell<Cycles>>,
+    cursor: Rc<Cell<Cycles>>,
 }
 
-impl Timeline {
+impl<D: TimeDomain> Timeline<D> {
     /// Suspend until `n` more cycles pass. Cumulative, not `now + n`: a tick can
     /// carry several M-cycles, and a task must catch up rather than drop the
     /// overshoot.
     pub fn wait(&self, n: Cycles) -> Wait {
-        let at = self.at.get().wrapping_add(n);
-        self.at.set(at);
+        let wake_at = self.cursor.get().wrapping_add(n);
+        self.cursor.set(wake_at);
         Wait {
             now: self.now.clone(),
-            at,
+            at: wake_at,
         }
     }
 
@@ -41,22 +55,52 @@ impl Timeline {
 
     /// The cycle this task has advanced itself to. Trails `now` while catching up.
     pub fn position(&self) -> Cycles {
-        self.at.get()
+        self.cursor.get()
     }
 
     /// A concurrent branch: shares the clock, owns its own position. `clone`
     /// is for helpers that run *on* the caller's timeline; `fork` is for
     /// sub-tasks that advance beside it.
-    pub fn fork(&self) -> Timeline {
+    pub fn fork(&self) -> Timeline<D> {
         Timeline {
+            tag: PhantomData,
             now: self.now.clone(),
-            at: Rc::new(Cell::new(self.at.get())),
+            cursor: Rc::new(Cell::new(self.cursor.get())),
         }
     }
 
     /// Absorb a branch's progress back into this timeline.
-    pub fn join(&self, branch: &Timeline) {
-        self.at.set(self.at.get().max(branch.at.get()));
+    pub fn join(&self, branch: &Timeline<D>) {
+        let furthest = self.cursor.get().max(branch.cursor.get());
+        self.cursor.set(furthest);
+    }
+}
+
+pub(crate) trait TimelineType {
+    fn build(cpu: &CpuClock, fixed: &FixedClock) -> Self;
+}
+
+impl TimelineType for Timeline<Cpu> {
+    fn build(cpu: &CpuClock, _fixed: &FixedClock) -> Self {
+        cpu.timeline()
+    }
+}
+
+impl TimelineType for Timeline<Fixed> {
+    fn build(_cpu: &CpuClock, fixed: &FixedClock) -> Self {
+        fixed.timeline()
+    }
+}
+
+impl TimelineType for (Timeline<Cpu>, Timeline<Fixed>) {
+    fn build(cpu: &CpuClock, fixed: &FixedClock) -> Self {
+        (cpu.timeline(), fixed.timeline())
+    }
+}
+
+impl TimelineType for (Timeline<Fixed>, Timeline<Cpu>) {
+    fn build(cpu: &CpuClock, fixed: &FixedClock) -> Self {
+        (fixed.timeline(), cpu.timeline())
     }
 }
 
@@ -104,11 +148,19 @@ impl Pulse {
     }
 }
 
+pub struct NotifyHandle(Rc<Cell<bool>>);
+
+impl NotifyHandle {
+    pub fn notify(&self) {
+        self.0.set(true);
+    }
+}
+
 /// Tasks never complete: `Infallible` makes that checked rather than conventional.
 struct Task(BoxFuture<Infallible>);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+
 pub enum Speed {
     #[default]
     Normal = 0,
@@ -141,10 +193,11 @@ impl Counter {
     }
 
     /// A task's cursor into this counter, starting where the counter is now.
-    fn timeline(&self) -> Timeline {
+    fn timeline<D: TimeDomain>(&self) -> Timeline<D> {
         Timeline {
-            at: Rc::new(Cell::new(self.now.get())),
+            tag: PhantomData::<D>,
             now: self.now.clone(),
+            cursor: Rc::new(Cell::new(self.now())),
         }
     }
 
@@ -169,7 +222,7 @@ impl FixedClock {
     pub fn tick(&self) {
         self.0.advance(1);
     }
-    pub fn timeline(&self) -> Timeline {
+    pub fn timeline(&self) -> Timeline<Fixed> {
         self.0.timeline()
     }
     pub fn stop(&self) {
@@ -177,6 +230,9 @@ impl FixedClock {
     }
     pub fn resume(&self) {
         self.0.resume();
+    }
+    pub fn now_cell(&self) -> Rc<Cell<Cycles>> {
+        self.0.now.clone()
     }
 }
 
@@ -199,10 +255,14 @@ impl CpuClock {
         })
     }
 
+    pub fn now_cell(&self) -> Rc<Cell<Cycles>> {
+        self.counter.now.clone()
+    }
+
     pub fn tick(&self) {
         self.counter.advance(1 << self.speed.get() as u8);
     }
-    pub fn timeline(&self) -> Timeline {
+    pub fn timeline(&self) -> Timeline<Cpu> {
         self.counter.timeline()
     }
     pub fn resume(&self) {
@@ -295,8 +355,14 @@ impl Time {
         self.exec.poll();
     }
 
-    pub fn spawn(&mut self, future: impl Future<Output = Infallible> + 'static) {
-        self.exec.spawn(future);
+    pub fn spawn<F, TD, Fut>(&mut self, get_fut: F)
+    where
+        F: FnOnce(TD) -> Fut,
+        TD: TimelineType,
+        Fut: Future<Output = Infallible> + 'static,
+    {
+        let task = get_fut(TD::build(&self.cpu, &self.fixed));
+        self.exec.spawn(task);
     }
 
     pub fn resume(&self) {
@@ -315,7 +381,11 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    async fn ticker(t: Timeline, period: Cycles, log: Rc<RefCell<Vec<Cycles>>>) -> Infallible {
+    async fn ticker<D: TimeDomain>(
+        t: Timeline<D>,
+        period: Cycles,
+        log: Rc<RefCell<Vec<Cycles>>>,
+    ) -> Infallible {
         loop {
             t.wait(period).await;
             log.borrow_mut().push(t.position());
@@ -328,22 +398,21 @@ mod tests {
         }
     }
 
-    fn spawn_ticker(
-        clock: &mut Time,
-        timeline: Timeline,
-        period: Cycles,
-    ) -> Rc<RefCell<Vec<Cycles>>> {
+    fn spawn_ticker<D>(clock: &mut Time, period: Cycles) -> Rc<RefCell<Vec<Cycles>>>
+    where
+        Timeline<D>: TimelineType,
+        D: TimeDomain + 'static,
+    {
         let log: Rc<RefCell<Vec<Cycles>>> = Rc::new(RefCell::new(Vec::new()));
         let handle = log.clone();
-        clock.spawn(ticker(timeline, period, handle));
+        clock.spawn(|timeline: Timeline<D>| ticker(timeline, period, handle));
         log
     }
 
     #[test]
     fn does_not_wake_before_its_deadline() {
         let mut clock = Time::new();
-        let timeline = clock.fixed.timeline();
-        let log = spawn_ticker(&mut clock, timeline, 4);
+        let log = spawn_ticker::<Fixed>(&mut clock, 4);
 
         clock_tick(&mut clock, 2);
         assert!(log.borrow().is_empty());
@@ -355,8 +424,7 @@ mod tests {
     #[test]
     fn catches_up_inside_one_poll() {
         let mut clock = Time::new();
-        let timeline = clock.fixed.timeline();
-        let log = spawn_ticker(&mut clock, timeline, 4);
+        let log = spawn_ticker::<Fixed>(&mut clock, 4);
 
         // Three periods in one tick: three wakes, on multiples of the period.
         clock_tick(&mut clock, 12);
@@ -366,10 +434,8 @@ mod tests {
     #[test]
     fn double_speed_splits_the_domains() {
         let mut clock = Time::new();
-        let t_cpu = clock.cpu.timeline();
-        let t_fixed = clock.fixed.timeline();
-        let cpu = spawn_ticker(&mut clock, t_cpu, 4);
-        let fixed = spawn_ticker(&mut clock, t_fixed, 4);
+        let cpu = spawn_ticker::<Cpu>(&mut clock, 4);
+        let fixed = spawn_ticker::<Fixed>(&mut clock, 4);
 
         clock.cpu.switch_speed();
 
@@ -389,8 +455,7 @@ mod tests {
 
         for id in 0..3u8 {
             let order = order.clone();
-            let t = clock.fixed.timeline();
-            clock.spawn(async move {
+            clock.spawn(|t: Timeline<Fixed>| async move {
                 loop {
                     t.wait(4).await;
                     order.borrow_mut().push(id);
@@ -419,8 +484,7 @@ mod tests {
     #[test]
     fn stopped_clock_advances_nothing() {
         let mut clock = Time::new();
-        let t_cpu = clock.cpu.timeline();
-        let log = spawn_ticker(&mut clock, t_cpu, 4);
+        let log = spawn_ticker::<Cpu>(&mut clock, 4);
 
         clock.cpu.stop();
         clock_tick(&mut clock, 16);

@@ -2,6 +2,7 @@ use std::io::Write;
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use super::mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu};
+use crate::clock::Cpu;
 use crate::{
     clock::{Cycles, Timeline, M_CYCLE},
     cpu::interrupt::InterruptRequest,
@@ -65,7 +66,7 @@ impl<S: ByteSink> Serial<S> {
         }
     }
 
-    pub async fn task(this: Rc<Serial<S>>, timeline: Timeline) -> Infallible {
+    pub async fn task(this: Rc<Serial<S>>, timeline: Timeline<Cpu>) -> Infallible {
         loop {
             // Idle until software arms a transfer. No borrow may straddle an
             // await: the SC write handler takes the same cell.

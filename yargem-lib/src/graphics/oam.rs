@@ -3,7 +3,7 @@
 use std::{cell::Cell, convert::Infallible, rc::Rc};
 
 use crate::{
-    clock::{Cycles, Timeline, M_CYCLE},
+    clock::{Cpu, Cycles, Timeline, M_CYCLE},
     memory::{
         bus::{Bus, BusController, BusOwner},
         mmu::{MemoryHandler, MemoryRead, MemoryWrite, Mmu},
@@ -43,7 +43,11 @@ impl DMAController {
         }
     }
 
-    pub async fn task(this: Rc<DMAController>, mmu: Rc<Mmu>, timeline: Timeline) -> Infallible {
+    pub async fn task(
+        this: Rc<DMAController>,
+        mmu: Rc<Mmu>,
+        timeline: Timeline<Cpu>,
+    ) -> Infallible {
         loop {
             while !this.state.requested.get() {
                 timeline.wait(M_CYCLE as Cycles).await;
